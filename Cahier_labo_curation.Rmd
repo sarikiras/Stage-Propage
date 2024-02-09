@@ -1,0 +1,257 @@
+---
+title: '"Cahier de labo : Curation données Propage"'
+author: "Sariaka Ramialison"
+date: "2024-02-07"
+output: html_document
+---
+
+<br>
+
+Le présent document recense les anomalies et problèmes sur les données *à plat* du PROPAGE contenues dans le fichier `all_data_propage20240201.xlsx`.
+
+Il existera a priori un travail de normalisation dû au changement du questionnaire (ajout de la fiche gestion) et de la saisie des données qui s'est effectuée entre vers 2019/2020 **quand exactement?**.
+
+Question : quelles données ont été conservées/perdues lors du changement?
+
+```{r, include = FALSE}
+library(readxl)
+library(tidyverse)
+library(leaflet)
+library(sp)
+library(maps)
+library(stringr)
+library(sf)
+```
+
+```{r, include = FALSE, cache=TRUE}
+path <- "/Users/sariakasalomon-ramialison/Downloads/all_data_propage20240201.xlsx"
+data <- read_excel(path)
+```
+<br>
+
+
+### 1. Étude par variable/groupe de variables
+<br>
+
+
+#### 1. Variable `id_releve` 
+<br>
+
+Cette variable correspond en fait à la session d'observation. Pas de `NA`s. [Format string "XX.XXX" **Comment est-elle créée?**]
+
+Dans les nouvelles saisies, un `id_releve` apparaît 39 fois (une ligne par taxon observé ou non).  
+Avant changement, un id_releve = 1 observation **effective** d'un taxon.
+
+On va identifier les sessions qui ne répondent pas à cette nouvelle norme. On s'intéresse également à la date de la session pour repérer à quel moment s'est effectué le changement.
+
+Ci-dessous le code pour récupérer les id des anciens relevés
+
+```{r }
+data_releves <- data |> 
+  select(id_releve, releve_date) 
+
+data_releves_count <- data_releves |>
+  count(id_releve)
+
+data_releves <- data_releves_count |>
+  left_join(data_releves, by = "id_releve") |>
+  arrange(desc(releve_date))
+
+#Table des anciens relevés (ainsi que des relevés dont la `date` est `NA`)
+data_anciens_releves <- filter(data_releves, n!=39) |>
+  unique()
+
+#Table des nouveaux relevés respectant la norme, une ligne = un taxon observé OU non
+data_nouveaux_releves <- filter(data_releves, n==39) |>
+  arrange(releve_date) |>
+  unique()
+
+#Id des anciens relevés
+id_anciens_releves <- data_anciens_releves$id_releve
+```
+
+
+**Commentaires**:
+
+i. Apparition des nouveaux relevés en 2019 (12 sessions)
+
+ii. Disparition totale des anciens relevés à partir de 2021. Sauf la session `id_releve`= 12690 en 2022 **(pourquoi?)**
+
+iii. En 2019 et 2020, chevauchement des 2 types de relevés
+
+iv. Apparition d'un nouveau problème : 23 sessions dont la date n'est par renseignée! **(comment corriger?, y a t il une variable qui permette de déduire une chronologie )?**
+
+<br>
+
+
+#### 2. Variables `id_structure` et `structure_nom` 
+<br>
+
+124 structures distinctes + les `NA`s. 
+
+Les dernières valeurs manquantes sur les structures apparaissent en 2020 (car champ devenu obligatoire dans le nouveau protocole de saisie).
+
+
+**Comment remplacer les `NA`?**
+
+i. Faire le lien avec d'autres sites "sur le même territoire" sur les autres années pour pouvoir compléter?  *Pas forcément pertinent car des sites très proches (voire un même espace) peuvent avoir plusieurs gestionnaires...*
+
+ii. Faire le lien avec l'utilisateur? Il existe des utilisateurs qui dépendent de plusieurs structures. Pourquoi?  *Peut-être pas d'incohérence : un même observateur pour plusieurs structures est tout à fait possible*. Cependant certains utilisateurs ont parfois renseigné leur structure, parfois non. A voir géographiquement si les sites concernés sont proches. Il n'y en a pas beaucoup quand même.
+
+
+```{r}
+# Liste des utilisateurs qui ont parfois renseigné la structure, parfois non
+user_na <- data |> 
+  select(user_id, structure_id) |>
+  filter(is.na(structure_id)) |>
+  unique() 
+user_non_na <- data |> 
+  select(user_id, structure_id) |>
+  filter(!is.na(structure_id)) |>
+  unique()
+intersect(user_na$user_id, user_non_na$user_id)
+```
+
+Je ne pousse pas plus loin l'étude des valeurs manquantes dans les structures pour l'instant, il faudrait que je regarde plus largement le lien avec les autres variables (de fait, le renseignement du nom de la structure ne me paraît par primordial pour faire les analyses ... )
+
+<br>
+
+
+#### 3. Etude des variables géographiques `site` , `site_id`, `site_coordonnees`, `site_departement`, `site_code_postal`, `transect_nom `et `transect_coordonnees`
+<br>
+
+Le code ainsi que mes essais et pérégrinations pour cette partie sont dans le fichier `Curation_geo_Progage.Rmd`.
+
+Tous les transects sont localisés, mais les sites sur lesquels ils sont situés ne sont pas tous définis.
+<br>
+
+##### 3.1 Sites sans aucune référence géographique 
+<br>
+
+2 sites sans aucune référence géographique (ni coordonnées, ni code postal) : `site_id`= 729 et `site_id`= 939. 
+
+**A. Site 729**
+
+Je suspecte fortement le `site_id`= 427 d'être le même que le `site_id`= 729. 
+
+- même nom `site` : "Parc Marcel Cachin - Saint-Denis"
+
+- même `user_id`: 116
+
+- le nom de structure diffère mais quasi le même `Plaine commune - Grand Paris` devenu `PT Plaine Commune`, d'ailleurs suite au changement du mode de saisie
+
+- le transect du Site 729 se situe exactement dans le polygone défini pour le site 429
+
+
+<img src="/Users/sariakasalomon-ramialison/Desktop/Screenshot 2024-02-07 at 22.03.51.png" alt="Localisation du `site_id`= 729" width="500">
+
+
+**Solution**: On peut remplacer les coordonnées `NA` du `site_id`= 729 par celles du `site_id`= 429.
+
+
+**B. Site 939**
+
+Le `site_id`= 939 correspond certainement au `site_id`= 5. Il y a même quasi-correspondance de transect `id_releve`= et `id_releve`= **(Peut-on considérer que c'est le même?)**
+
+
+<img src="/Users/sariakasalomon-ramialison/Desktop/Screenshot 2024-02-08 at 10.37.55.png" alt="Localisation du `site_id`= 5" width="500">
+
+*Remarques*: 
+
+- En cherchant des sites pouvant matcher, le `site_id`= 1484 est aussi apparu!
+
+- Pour ces trois sites `site_id`= 5, 939, 1024 il y a quand même beaucoup de similitudes (même `user_id`=116 par exemple, encore lui): faut-il fusionner ou pas pertinent? Il y a même plusieurs transects similaires (voir cartes)... Se pose le problème du suivi du transect dans le temps...
+
+- *En passant, penser à résoudre le problème du format des id lors de l'extraction - car besoin de reformater dans la table à plat*
+
+<img src="/Users/sariakasalomon-ramialison/Desktop/Screenshot 2024-02-08 at 10.56.51.png" alt="Localisation du `site_id`= 1484" width="500">
+
+<img src="/Users/sariakasalomon-ramialison/Desktop/Screenshot 2024-02-08 at 11.01.09.png" alt="Localisation du `site_id`= 1484" width="500">
+
+
+Petit table de correspondance nommée `data_sites` pour remplacer les valeurs manquantes.
+
+```{r}
+# Code de remplacement dans la table data_sites (uniquement)
+data_sites <- data |>
+  select(site_id, site, site_coordonnees, site_departement, site_code_postal) |>
+  unique()
+
+data_sites[data_sites$site_id=="939", 3:5] <- data_sites[data_sites$site_id=="5", 3:5]
+data_sites[data_sites$site_id=="729", 3:5] <- data_sites[data_sites$site_id=="427", 3:5]
+```
+
+
+```{r, include=FALSE}
+# Vérification
+data_sites |> filter(site_id == "729" | site_id== "939")
+```
+**Commmentaire** : Ok a priori ça fonctionne comme ça!
+
+##### 3.2 Sites sans code postal
+
+Après avoir remplacé les valeurs `NA` des deux sites précédents,  il ne reste que 6 sites sans code postal.
+On le fait donc à la main : grâce à une petite recherche Google ainsi qu'une vérification de la localisation.
+
+```{r}
+# Liste des sites sans code postal 
+site_ss_ref <- c(20,128,271,417,1305,1306)
+
+# codesvpostaux correspondants 
+codes_postaux <- c(35131, 59800, 22260,49300,69730, 69730 )
+```
+
+
+
+
+##### 3.2 Sites sans coordonnées géographiques 
+
+Finalement il n'en reste plus que 2. Démarche similiaire à précédemment pour compléter (par recherche de noms similaires)
+
+```{r}
+site_ss_coord <- data_sites |>
+  filter(is.na(site_coordonnees))
+site_ss_coord 
+```
+```{r}
+# recherche d'une correspondance par nom
+data_sites |> filter(str_detect(site, "Vincennes")) |> 
+  group_by(site_id) |>
+  unique()
+```
+```{r}
+# remplacement des coordonnées manquantes
+data_sites[data_sites$site_id=="597", 3] <- data_sites[data_sites$site_id=="34", 3]
+data_sites |> filter(site_id == "597")
+```
+OK Tout va bien pour le bois de vincennes
+
+
+MAIS:
+
+Impossible de trouver dans la table une correspondance avec le Jardin d'agronomie tropicale (ni par nom, ni par département).
+Peut-être essayer de regarder l'usager qui a fait le relevé. 
+Cependant, Le Jardin est une entité du Bois de Vincennes, située à son extremité orientale (94 130, mais limitrophe 70012).
+Coordonnées (48.839839266697716, 2.46666394884083)!
+
+
+##### 3.3 Sites sans code postal - ni departement- (à faire pour avoir une jolie table complète...)
+
+
+
+##### 3.4 Création de la spatial dataframe pour visualiser les cartes
+
+Attention!
+
+Dans la table : la variable `site_coordonnee` peut être soit un polygone, soit un point!
+
+
+1. Création d'une spatial dataframe juste pour les sites
+1. Création d'une spatial dataframe juste pour la gemometrie des sites 
+
+
+### 2. Étude plus globale
+<br>
+
+
+
