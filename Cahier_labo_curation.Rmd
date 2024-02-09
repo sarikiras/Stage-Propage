@@ -8,10 +8,9 @@ output: html_document
 <br>
 
 Le présent document recense les anomalies et problèmes sur les données *à plat* du PROPAGE contenues dans le fichier `all_data_propage20240201.xlsx`.
+Il propose aussi des solutions de curation.
 
-Il existera a priori un travail de normalisation dû au changement du questionnaire (ajout de la fiche gestion) et de la saisie des données qui s'est effectuée entre vers 2019/2020 **quand exactement?**.
-
-Question : quelles données ont été conservées/perdues lors du changement?
+Il existera a priori un travail de normalisation dû au changement du questionnaire (ajout de la fiche gestion) et de la saisie des données qui s'est effectuée entre vers 2019/2020 **quand exactement?**. Quelles données ont été conservées/perdues lors du changement?
 
 ```{r, include = FALSE}
 library(readxl)
@@ -23,11 +22,20 @@ library(stringr)
 library(sf)
 ```
 
-```{r, include = FALSE, cache=TRUE}
+
+```{r, cache=TRUE, warning=FALSE}
 path <- "/Users/sariakasalomon-ramialison/Downloads/all_data_propage20240201.xlsx"
 data <- read_excel(path)
 ```
 <br>
+
+J'ai eu des problèmes dans la suite pour travailler sur les id à cause de l'apparition d'un espace insécable (peut être format à préciser lors de l'extraction?).
+Je reformate les id à problème
+```{r}
+data$id_releve <- gsub(intToUtf8(8239),"", data$id_releve)
+data$site_id <- gsub(intToUtf8(8239),"", data$site_id)
+```
+
 
 
 ### 1. Étude par variable/groupe de variables
@@ -37,7 +45,8 @@ data <- read_excel(path)
 #### 1. Variable `id_releve` 
 <br>
 
-Cette variable correspond en fait à la session d'observation. Pas de `NA`s. [Format string "XX.XXX" **Comment est-elle créée?**]
+
+Cette variable correspond en fait à la session d'observation. Pas de `NA`s. 
 
 Dans les nouvelles saisies, un `id_releve` apparaît 39 fois (une ligne par taxon observé ou non).  
 Avant changement, un id_releve = 1 observation **effective** d'un taxon.
@@ -123,7 +132,9 @@ Je ne pousse pas plus loin l'étude des valeurs manquantes dans les structures p
 Le code ainsi que mes essais et pérégrinations pour cette partie sont dans le fichier `Curation_geo_Progage.Rmd`.
 
 Tous les transects sont localisés, mais les sites sur lesquels ils sont situés ne sont pas tous définis.
+
 <br>
+
 
 ##### 3.1 Sites sans aucune référence géographique 
 <br>
@@ -151,7 +162,7 @@ Je suspecte fortement le `site_id`= 427 d'être le même que le `site_id`= 729.
 
 **B. Site 939**
 
-Le `site_id`= 939 correspond certainement au `site_id`= 5. Il y a même quasi-correspondance de transect `id_releve`= et `id_releve`= **(Peut-on considérer que c'est le même?)**
+Le `site_id`= 939 correspond certainement au `site_id`= 5. Il y a même quasi-correspondance de transect (voir transect 3 du site 5) *(Peut-on considérer que c'est le même?)**
 
 
 <img src="/Users/sariakasalomon-ramialison/Desktop/Screenshot 2024-02-08 at 10.37.55.png" alt="Localisation du `site_id`= 5" width="500">
@@ -169,14 +180,19 @@ Le `site_id`= 939 correspond certainement au `site_id`= 5. Il y a même quasi-co
 <img src="/Users/sariakasalomon-ramialison/Desktop/Screenshot 2024-02-08 at 11.01.09.png" alt="Localisation du `site_id`= 1484" width="500">
 
 
-Petit table de correspondance nommée `data_sites` pour remplacer les valeurs manquantes.
+On créée une table de correspondance nommée `data_sites` dans laquelle on remplace les valeurs manquantes.
+
+```{r}
+# Création de la table
+data_sites <- data |>
+  select(site_id, site, site_coordonnees, site_departement, site_code_postal) |>
+  unique() 
+```
+
+
 
 ```{r}
 # Code de remplacement dans la table data_sites (uniquement)
-data_sites <- data |>
-  select(site_id, site, site_coordonnees, site_departement, site_code_postal) |>
-  unique()
-
 data_sites[data_sites$site_id=="939", 3:5] <- data_sites[data_sites$site_id=="5", 3:5]
 data_sites[data_sites$site_id=="729", 3:5] <- data_sites[data_sites$site_id=="427", 3:5]
 ```
@@ -186,7 +202,7 @@ data_sites[data_sites$site_id=="729", 3:5] <- data_sites[data_sites$site_id=="42
 # Vérification
 data_sites |> filter(site_id == "729" | site_id== "939")
 ```
-**Commmentaire** : Ok a priori ça fonctionne comme ça!
+**Commentaire** : Ok a priori ça fonctionne comme ça!
 
 ##### 3.2 Sites sans code postal
 
@@ -197,46 +213,52 @@ On le fait donc à la main : grâce à une petite recherche Google ainsi qu'une 
 # Liste des sites sans code postal 
 site_ss_ref <- c(20,128,271,417,1305,1306)
 
-# codesvpostaux correspondants 
+# codes postaux correspondants 
 codes_postaux <- c(35131, 59800, 22260,49300,69730, 69730 )
 ```
 
 
+##### 3.2 Sites restant sans coordonnées géographiques 
+
+Finalement il n'en reste plus que 2: `site_id`= 597 et `site_id`= 1382. 
+
+**A. Site 597**
+
+Ce `site_id`= 597 a pour nom bois de vincennes. Le transect correspondant est effectivement situé au coeur du bois, mais dans une entité qui semble indépendante (la Ferme de Paris, gestionnaire = Mairie de Paris).
+
+Le `site_id`= 34 correspond egalement au bois de vincennes (mais géré par la DEVE/SAB/DBV). 
+
+<img src="/Users/sariakasalomon-ramialison/Desktop/Screenshot 2024-02-09 at 10.21.49.png" alt="Localisation du `site_id`= 34" width="500">
 
 
-##### 3.2 Sites sans coordonnées géographiques 
-
-Finalement il n'en reste plus que 2. Démarche similiaire à précédemment pour compléter (par recherche de noms similaires)
-
-```{r}
-site_ss_coord <- data_sites |>
-  filter(is.na(site_coordonnees))
-site_ss_coord 
-```
-```{r}
-# recherche d'une correspondance par nom
-data_sites |> filter(str_detect(site, "Vincennes")) |> 
-  group_by(site_id) |>
-  unique()
-```
-```{r}
-# remplacement des coordonnées manquantes
-data_sites[data_sites$site_id=="597", 3] <- data_sites[data_sites$site_id=="34", 3]
-data_sites |> filter(site_id == "597")
-```
-OK Tout va bien pour le bois de vincennes
+QUID de la correction : Définir le polygone autour de la ferme de Paris à l'intérieur du bois? ou bien garder tout le bois?
 
 
-MAIS:
+**B. Site 1382**
+
 
 Impossible de trouver dans la table une correspondance avec le Jardin d'agronomie tropicale (ni par nom, ni par département).
-Peut-être essayer de regarder l'usager qui a fait le relevé. 
+
 Cependant, Le Jardin est une entité du Bois de Vincennes, située à son extremité orientale (94 130, mais limitrophe 70012).
 Coordonnées (48.839839266697716, 2.46666394884083)!
 
+Structure gestionnaire, idem que le `site_id`=34, c'est le DEVE/SAB/DBV. 
+<img src="/Users/sariakasalomon-ramialison/Desktop/Screenshot 2024-02-09 at 10.46.56.png" alt="Localisation du `site_id`= 34" width="500">
 
-##### 3.3 Sites sans code postal - ni departement- (à faire pour avoir une jolie table complète...)
+En fait le transect du `site_id`=1382 d'autres transects du `site_id`= 34, donc on peut conclure que c'est le même site. 
 
+*Correction*: On remplace le `NA` par les coordonnées du `site_id`= 34.
+Et pour ne pas avoir de trou, on va finalement faire la même chose pour le site précédent.
+
+
+D'où la petite mise à jour de la table `data_sites`
+
+```{r}
+# code pour veut remplacer des coordonnées manquantes 
+data_sites[data_sites$site_id=="597", 3] <- data_sites[data_sites$site_id=="34", 3]
+data_sites[data_sites$site_id=="1382", 3] <- data_sites[data_sites$site_id=="34", 3]
+
+```
 
 
 ##### 3.4 Création de la spatial dataframe pour visualiser les cartes
