@@ -217,6 +217,23 @@ site_ss_ref <- c(20,128,271,417,1305,1306)
 codes_postaux <- c(35131, 59800, 22260,49300,69730, 69730 )
 ```
 
++ Remplacement des codes postaux 
+
+
+```{r}
+data_sites <- data_sites |> 
+  mutate(site_code_postal = case_when(
+    site_id == 20 ~ 35131,
+    site_id == 128 ~ 59800,
+    site_id == 271 ~ 35131,
+    site_id == 417 ~ 49300,
+    site_id == 1305 ~ 69730,
+    site_id == 1306 ~ 69730,
+    TRUE ~ site_code_postal
+    ))
+```
+
+
 
 ##### 3.2 Sites restant sans coordonnées géographiques 
 
