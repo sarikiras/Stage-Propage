@@ -1,0 +1,214 @@
+---
+title: "Curation Habitat et Gestion"
+author: "Sariaka Ramialison"
+date: "2024-02-13"
+output: html_document
+---
+
+Ceci est mon espace de travail pour traiter les données habitat et gestion de la base de données Propage
+
+```{r, include=FALSE}
+library(readxl)
+library(tidyverse)
+library(leaflet)
+library(sp)
+library(maps)
+library(stringr)
+library(sf)
+library(ggmap)
+library(purrr)
+```
+
+
+## 1. Lecture des données
+```{r, include=FALSE, cache=TRUE}
+data <- read_excel("../all_data_propage20240201.xlsx")
+```
+
+Formatage de l'id
+
+```{r}
+data$id_releve <- gsub(intToUtf8(8239),"", data$id_releve)
+```
+
+Identification des colonnes qui nous intéressent
+```{r}
+colnames(data)
+```
+
+On va garder :
+- [1] id_relevé,  
+- de [10]-[28] pour les données de l'*espace vert* = *site* : Histoire - Usage - Itinéraire de culture (déjà un peu de gestion???),
+- de [29]-[51] Saisie des données de la *Fiche Habitats* 
+- de [59]-[73] Saisie des informations de la nouvelle fiche *Gestion annuelle sur le transect* ([59]-[60] : info sur le transect et [61]-[73]: gestion du transect) 
+
+## 2. Extraction des données de habitat-gestion
+
+```{r}
+data_habitat_gestion <- data |>
+  select(1, 10:28, 29:51, 59:73) |>
+  unique()
+colnames(data_habitat_gestion)
+```
+
+- [1] id_relevé,  
+- de [2]-[20] données de l'*espace vert* = *site* : Histoire - Usage - Itinéraire de culture (déjà un peu de gestion???),
+- de [20]-[43] Saisie des données de la *Fiche Habitats* 
+- de [44]-[58] Saisie des informations de la nouvelle fiche *Gestion annuelle sur le transect* ([59]-[60] : info sur le transect et [61]-[73]: gestion du transect) 
+
+
+## 3. Etude des NA dans les anciennes saisies des données Gestion annuelle sur le transect
+
++ Question : qu'est ce qui apparaît dans les colonnes [44] à [58] dans les anciennes saisies?
+
+
+```{r}
+# Rappel flagage des anciennes saisies
+
+data_releves <- data |> 
+  select(id_releve, releve_date) 
+
+data_releves_count <- data_releves |>
+  count(id_releve)
+
+data_releves <- data_releves_count |>
+  left_join(data_releves, by = "id_releve") |>
+  arrange(desc(releve_date))
+
+data_anciens_releves <- filter(data_releves, n!=39) |>
+  unique()
+
+data_nouveaux_releves <- filter(data_releves, n==39) |>
+  unique()
+
+id_anciens_releves <- data_anciens_releves$id_releve
+id_nouveaux_releves <- data_nouveaux_releves$id_releve
+```
+
+
++ Selection des anciens releves dans la table data_habitat_region
+
+```{r}
+anciens_releves <- data_habitat_gestion |> 
+  filter (id_releve %in% id_anciens_releves) |>
+  select(44:58)
+
+anciens_releves
+```
+
+
++ Selection des nouveaux releves dans la table data_habitat_region
+
+```{r}
+nouveaux_releves <- data_habitat_gestion |> 
+  filter (id_releve %in% id_nouveaux_releves) |>
+  select(44:58)
+
+nouveaux_releves
+```
+
+
++ On va regarder la quantité d'information que l'on perd dans les anciennes saisies
+
+Traitement préalable : on remplace les `"[]"` par des `NA`
+
+```{r}
+nouveaux_releves <- nouveaux_releves |>
+  mutate(traitements_phyto = case_when(
+    traitements_phyto=="[]" ~ NA,
+    TRUE ~ traitements_phyto
+    )) |>
+  mutate(pressions = case_when(
+    pressions=="[]" ~ NA,
+    TRUE ~ pressions
+    )) |>
+  mutate(milieux = case_when(
+    milieux=="[]" ~ NA,
+    TRUE ~ milieux
+    )) |>
+  mutate(periodes_fauches = case_when(
+    periodes_fauches=="[]" ~ NA,
+    TRUE ~ periodes_fauches
+    )) |>
+   mutate(paturages = case_when(
+    paturages=="[]" ~ NA,
+    TRUE ~ paturages
+    )) 
+```
+
+Meme chose pour les anciens releves
+
+```{r}
+anciens_releves <- anciens_releves |>
+  mutate(traitements_phyto = case_when(
+    traitements_phyto=="[]" ~ NA,
+    TRUE ~ traitements_phyto
+    )) |>
+  mutate(pressions = case_when(
+    pressions=="[]" ~ NA,
+    TRUE ~ pressions
+    )) |>
+  mutate(milieux = case_when(
+    milieux=="[]" ~ NA,
+    TRUE ~ milieux
+    )) |>
+  mutate(periodes_fauches = case_when(
+    periodes_fauches=="[]" ~ NA,
+    TRUE ~ periodes_fauches
+    )) |>
+   mutate(paturages = case_when(
+    paturages=="[]" ~ NA,
+    TRUE ~ paturages
+    )) 
+```
+
+
+
+
++ On compare ensuite la proportion de `NA` dans les anciens relevés, comparés aux nouveaux
+
+
+```{r}
+# Calcul du pourcentage de NA par colonne
+
+pourcentage_na_anciens <- round(colMeans(is.na(anciens_releves)), digits=2) * 100
+pourcentage_na_nouveaux <- round(colMeans(is.na(nouveaux_releves)), digits=2) * 100
+
+# Création d'un dataframe pour afficher les résultats
+table_na <- tibble(
+  Nom_colonne = names(anciens_releves),
+  Part_NA_anciens = pourcentage_na_anciens,
+  Part_NA_nouveaux = pourcentage_na_nouveaux
+  )
+
+# Affichage du résultat
+print(table_na)
+```
+**Conclusion** : On voit grossièrement sur cette table que les seules variables de gestion sur lesquelles on peut travailler sur toute la période sont:
+`semis_sursemis` (systématiquement rempli), `fauche`, `période_fauches`, `paturages`
+
+
+##### Un exemple : étude des périodes de fauche 
+
+Par acquit de conscience, on va quand même vérifier que ce sont les mêmes facteurs 
+
+
+```{r}
+unique(anciens_releves$periodes_fauches)
+unique(nouveaux_releves$periodes_fauches)
+```
+
+Déjà, il n'y a pas eu changement de facteurs... ouf 
+Voyons s'il y a correspondance entre les réponses apportées et la fréquence des fauches
+
+```{r}
+unique(anciens_releves$frequence_fauches)
+unique(nouveaux_releves$frequence_fauches)
+```
+
+
+**Commentaires** : 
+- On peut déduire la fréquence des fauches de la période de fauches (est-ce qu'il y a des correspondances bizarres d'ailleurs?)
+- Autre bizarrerie : Parfois co-existence de 'Je ne sais pas' avec des périodes de fauches bien définies : est ce que ça exprime un doute? 
+
+

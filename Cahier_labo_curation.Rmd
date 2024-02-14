@@ -24,7 +24,7 @@ library(sf)
 
 
 ```{r, cache=TRUE, warning=FALSE}
-path <- "/Users/sariakasalomon-ramialison/Downloads/all_data_propage20240201.xlsx"
+path <- "../all_data_propage20240201.xlsx"
 data <- read_excel(path)
 ```
 <br>
@@ -38,7 +38,7 @@ data$site_id <- gsub(intToUtf8(8239),"", data$site_id)
 
 
 
-### 1. Étude par variable/groupe de variables
+### I. Étude par variable/groupe de variables
 <br>
 
 
@@ -154,7 +154,7 @@ Je suspecte fortement le `site_id`= 427 d'être le même que le `site_id`= 729.
 - le transect du Site 729 se situe exactement dans le polygone défini pour le site 429
 
 
-<img src="/Users/sariakasalomon-ramialison/Desktop/Screenshot 2024-02-07 at 22.03.51.png" alt="Localisation du `site_id`= 729" width="500">
+<img src="./Images/Screenshot 2024-02-07 at 22.03.51.png" alt="Localisation du `site_id`= 729" width="500">
 
 
 **Solution**: On peut remplacer les coordonnées `NA` du `site_id`= 729 par celles du `site_id`= 429.
@@ -165,7 +165,7 @@ Je suspecte fortement le `site_id`= 427 d'être le même que le `site_id`= 729.
 Le `site_id`= 939 correspond certainement au `site_id`= 5. Il y a même quasi-correspondance de transect (voir transect 3 du site 5) *(Peut-on considérer que c'est le même?)**
 
 
-<img src="/Users/sariakasalomon-ramialison/Desktop/Screenshot 2024-02-08 at 10.37.55.png" alt="Localisation du `site_id`= 5" width="500">
+<img src="./Images/Screenshot 2024-02-08 at 10.37.55.png" alt="Localisation du `site_id`= 5" width="500">
 
 *Remarques*: 
 
@@ -175,9 +175,9 @@ Le `site_id`= 939 correspond certainement au `site_id`= 5. Il y a même quasi-co
 
 - *En passant, penser à résoudre le problème du format des id lors de l'extraction - car besoin de reformater dans la table à plat*
 
-<img src="/Users/sariakasalomon-ramialison/Desktop/Screenshot 2024-02-08 at 10.56.51.png" alt="Localisation du `site_id`= 1484" width="500">
+<img src="./Images/Screenshot 2024-02-08 at 10.56.51.png" alt="Localisation du `site_id`= 1484" width="500">
 
-<img src="/Users/sariakasalomon-ramialison/Desktop/Screenshot 2024-02-08 at 11.01.09.png" alt="Localisation du `site_id`= 1484" width="500">
+<img src="./Images/Screenshot 2024-02-08 at 11.01.09.png" alt="Localisation du `site_id`= 1484" width="500">
 
 
 On créée une table de correspondance nommée `data_sites` dans laquelle on remplace les valeurs manquantes.
@@ -245,7 +245,7 @@ Ce `site_id`= 597 a pour nom bois de vincennes. Le transect correspondant est ef
 
 Le `site_id`= 34 correspond egalement au bois de vincennes (mais géré par la DEVE/SAB/DBV). 
 
-<img src="/Users/sariakasalomon-ramialison/Desktop/Screenshot 2024-02-09 at 10.21.49.png" alt="Localisation du `site_id`= 34" width="500">
+<img src="./Images/Screenshot 2024-02-09 at 10.21.49.png" alt="Localisation du `site_id`= 34" width="500">
 
 
 QUID de la correction : Définir le polygone autour de la ferme de Paris à l'intérieur du bois? ou bien garder tout le bois?
@@ -260,7 +260,7 @@ Cependant, Le Jardin est une entité du Bois de Vincennes, située à son extrem
 Coordonnées (48.839839266697716, 2.46666394884083)!
 
 Structure gestionnaire, idem que le `site_id`=34, c'est le DEVE/SAB/DBV. 
-<img src="/Users/sariakasalomon-ramialison/Desktop/Screenshot 2024-02-09 at 10.46.56.png" alt="Localisation du `site_id`= 34" width="500">
+<img src="./Images/Screenshot 2024-02-09 at 10.46.56.png" alt="Localisation du `site_id`= 34" width="500">
 
 En fait le transect du `site_id`=1382 d'autres transects du `site_id`= 34, donc on peut conclure que c'est le même site. 
 
@@ -278,18 +278,12 @@ data_sites[data_sites$site_id=="1382", 3] <- data_sites[data_sites$site_id=="34"
 ```
 
 
-##### 3.4 Création de la spatial dataframe pour visualiser les cartes
-
-Attention!
-
-Dans la table : la variable `site_coordonnee` peut être soit un polygone, soit un point!
+##### 3.3 Quid des sites qui sont définis par un point et non un polygone?
 
 
-1. Création d'une spatial dataframe juste pour les sites
-1. Création d'une spatial dataframe juste pour la gemometrie des sites 
 
 
-### 2. Étude plus globale
+### II. Étude plus globale
 <br>
 
 

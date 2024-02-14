@@ -1,0 +1,157 @@
+---
+title: "Début curation des données Propage "
+author: "Sariaka Ramialison"
+date: "2024-02-05"
+output: html_document
+---
+
+Ceci est mon permier espace de travail pour traiter les données Propage
+
+```{r, include = FALSE}
+library(readxl)
+library(tidyverse)
+library(leaflet)
+library(sp)
+library(maps)
+library(stringr)
+library(sf)
+```
+
+
+
+
+# Curation des données Propage
+
+
+Le présent document recense les anomalies et problèmes sur les données *à plat* du PROPAGE contenues dans le fichier `all_data_propage20240201.xlsx`.
+
+Il existera a priori un travail de normalisation dû au changement du questionnaire (ajout de la fiche gestion) et de la saisie des données qui s'est effectuée entre 2020/2021 **quand exactement?**.
+
+La table à plat comprend 164323 observations de 77 variables. 
+
+```{r, include = FALSE, cache=TRUE}
+path <- "../all_data_propage20240201.xlsx"
+data <- read_excel(path)
+```
+
+
+### 1. Étude par variable/groupe de variables
+
+#### 1. Variable `id_releve` 
+
+Cette variable correspond en fait à la session d'observation. Pas de `NA`s. Format string "XX.XXX"
+**Comment est-elle créée?** [edit 13/12 : visiblement les deux premières valeurs XX correspondent à l'année]
+
+En revanche, dans les nouvelles saisies, un `id_releve` apparaît 39 fois (une ligne par taxon observé ou non)
+Avant changement, un id_releve = 1 observation **effective** d'un taxon.
+
+On va identifier les sessions qui ne répondent pas à cette nouvelle norme. On s'intéresse également à la date de la session pour repérer à quel moment s'est effectué le changement.
+
+
+```{r, include = FALSE}
+data_releves <- data |> 
+  select(id_releve, releve_date) 
+
+data_releves_count <- data_releves |>
+  count(id_releve)
+
+data_releves <- data_releves_count |>
+  left_join(data_releves, by = "id_releve") |>
+  arrange(desc(releve_date))
+```
+
+
++ Table des anciens relevés (ainsi que des relevés dont la `date` est `NA`)
+```{r}
+data_anciens_releves <- filter(data_releves, n!=39) |>
+  unique()
+liste_anciens_releves <-data_anciens_releves$id_releve
+```
+
++ Table des nouveaux relevés respectant la norme, une ligne = un taxon observé OU non
+
+```{r}
+data_nouveaux_releves <- filter(data_releves, n==39) |>
+  arrange(releve_date) |>
+  unique()
+```
+
+**Commentaires**:
+
+i. Apparition des nouveaux relevés en 2019 (12 sessions)
+
+ii. Disparition totale des anciens relevés à partir de 2021. Sauf la session `12690` en 2022 **(pourquoi?)**
+
+iii. En 2019 et 2020, chevauchement des 2 types de relevés
+
+iv. Apparition d'un nouveau problème : 23 sessions dont la date n'est par renseignée! **(comment corriger?, y a t il une variable qui permette de déduire une chronologie )?**
+
+#### 2. Etude des variables `id_structure` et `structure_nom` 
+
+
+124 structures distinctes + les `NA`s. 
+
+*Stratégie de remplissage* Peut-être faire le lien avec d'autres sites aux alentours sur les autres années pour pouvoir compléter? Ou bien avec l'utilisateur?
+
++ On commence par le lien entre utilisateur et structure de rattachement
+
+Table de rattachement de l'utilisateur et de la structure à laquelle il appartient 
+
+```{r}
+table_user_structure <- data |>
+  select(structure_id, structure_nom, user_id) |>
+  unique()
+# 253 lignes observées, alors qu'il y a 232 user_id différentes --> donc il peut exister 1 user pour plusieurs sites
+```
+
+Résumé de chaque utilisateur et des/dela structure à laquelle il dépend
+
+```{r}
+aggregated_data <- table_user_structure %>%
+  group_by(user_id) %>%
+  summarise(liste_structure_id = list(unique(structure_id)), liste_structures_nom = list(unique(structure_nom)))
+```
+
+**Commentaires**:
+- Il existe des utilisateurs qui dépendent de plusieurs structures? Pourquoi?
+- On peut voir qu'effectivement on certains utilisateurs ont parfois renseigné leur structure, parfois non. A voir géographiquement si les sites sont proches. Il n'y en a pas beaucoup quand même.
+- Regarder s'il ne s'agit pas d'un problème d'extraction des données à cause du changement en 2020? Effectivement, il y a des blancs entre 2009 et 2020.
+
+```{r}
+data |> 
+  select(releve_date, user_id, structure_id) |>
+  filter(user_id==70)
+```
+Liste des utilisateurs qui ont parfois renseigné, parfois non...
+```{r}
+user_na <- data |> 
+  select(user_id, structure_id) |>
+  filter(is.na(structure_id)) |>
+  unique() 
+user_non_na <- data |> 
+  select(user_id, structure_id) |>
+  filter(!is.na(structure_id)) |>
+  unique()
+
+intersect(user_na$user_id, user_non_na$user_id)
+```
+
+
+
+```{r}
+data |> 
+  select(releve_date, user_id, structure_id) |>
+  filter(is.na(structure_id)) |>
+  unique() |>
+  arrange(desc(releve_date))
+```
+
+
+
+
+
+
+
+#### 3. Etude des variables géographiques `site` , `site_id`, `site_coordonnees`, `site_departement`, `site_code_postal`, `transect_nom `et `transect_coordonnees`
+
+Voir `2_Curation_geo_Propage.Rmd`

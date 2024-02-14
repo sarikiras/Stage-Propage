@@ -1,0 +1,590 @@
+---
+title: 'Propage : Curation données géographiques'
+author: "Sariaka Ramialison"
+date: "2024-02-08"
+output: html_document
+---
+
+
+Ceci est mon espace de travail pour traiter les données géographiques de Propage
+
+```{r, include=FALSE}
+library(readxl)
+library(tidyverse)
+library(leaflet)
+library(sp)
+library(maps)
+library(stringr)
+library(sf)
+library(ggmap)
+library(purrr)
+```
+
+
+## 1. Lecture des données
+```{r, include=FALSE, cache=TRUE}
+data <- read_excel("../all_data_propage20240201.xlsx")
+```
+
+## 2. Extraction des données de géographie
+
+```{r}
+data_site_transect <- data |>
+  select(user_id, site_id, site, site_coordonnees, site_departement, site_code_postal, transect_nom, transect_coordonnees) |>
+  unique()
+```
+
+
+
+## 3. Des fonctions bien utiles
+
++ Transformation d'une string contenant des coordonnées en liste de coordonnées
+
+```{r}
+coords <- function(my_string){
+  latlong <- unlist(str_extract_all(my_string, "-?\\d+(\\.\\d+)?")) #récupère juste les coordonnées
+  lat <- as.numeric(latlong[which(seq_along(latlong) %% 2 == 0)])
+  long <- as.numeric(latlong[which(seq_along(latlong) %% 2 == 1)])
+  return(list(long, lat))
+}
+```
+
+
++ Fonctions qui donnent les latitudes moyennes 
+
+```{r}
+long_moy <- function(my_string){
+  mean(coords(my_string)[[1]])
+}
+
+lat_moy <- function(my_string){
+  mean(coords(my_string)[[2]])
+}
+```
+
+Exemple
+```{r}
+long_moy(data_site_transect$site_coordonnees[1])
+lat_moy(data_site_transect$site_coordonnees[1])
+```
+
+## 4. Données manquantes sur les coordonnées des sites 
+
+Existe-t-il des transects sans coordonnées géographiques? 
+```{r}
+data_site_transect |>
+  filter(is.na(transect_coordonnees))
+```
+Réponse : Nee, tous les transects sont localisés (ouf!)
+
+Au final, 4 sites sans référence géographique  729 - 939 - 597 - 1382
+
+```{r}
+site_ss_ref <- filter(data_site_transect, is.na(site_coordonnees)) |>
+  unique()
+site_ss_ref
+```
+
+Comment remplacer les `NA` ?
+
+
+##### 4.1 Site `id_site`= 729
+
+```{r}
+# Pour le site `729`: recherche de sites au nom similaire
+data_site_transect |> filter(str_detect(site, "Cachin")) |> 
+  group_by(site_id) |>
+  unique()
+```
+**Solution**: Mêmes coordonnées que le site 427! Vérification d'autres similitudes
+
+
+```{r}
+data_comp <- data |> filter(site_id==427 | site_id==729)
+data_comp
+```
+```{r}
+plans <- c(unique(data_comp$transect_coordonnees), data_comp$site_coordonnees[1])
+plans
+```
+
+Fonction polygone
+```{r}
+polygone <- function(my_string){
+  latlong <- unlist(str_extract_all(my_string, "-?\\d+(\\.\\d+)?")) #récupère juste les coordonnées
+  lat <- as.numeric(latlong[which(seq_along(latlong) %% 2 == 0)])
+  long <- as.numeric(latlong[which(seq_along(latlong) %% 2 == 1)])
+  cbind(long, lat)
+}
+polygone(plans[3])[,1]
+```
+
+Fonction polyline
+```{r}
+polyline <- function(my_linestring){
+  latlong <- unlist(str_extract_all(my_linestring, "-?\\d+(\\.\\d+)?")) #récupère juste les coordonnées
+  lat <- as.numeric(latlong[which(seq_along(latlong) %% 2 == 0)])
+  long <- as.numeric(latlong[which(seq_along(latlong) %% 2 == 1)])
+  cbind(long, lat)
+}
+polyline(plans[1])
+```
+
+
+```{r}
+# Création de la carte Leaflet
+map <- leaflet() |>
+  addTiles() |>
+  addPolylines(data = polyline(plans[1]), color = "red", label='Transect du site 427') |>
+  addPolylines(data = polyline(plans[2]), color = "green", label='Transect du site 729') |>
+  addLegend(colors="green", labels="transect site 729") |>
+  addPolygons(lng=polygone(plans[3])[,1], 
+              lat= polygone(plans[3])[,2], 
+              fillColor = "blue",                      # Couleur de remplissage
+              fillOpacity = 0.2) |>
+  addLegend(colors=c('blue','red'), labels=c('site 427',"transect site 427"))
+
+# Affichage de la carte
+map
+
+```
+
+
+##### 4.2 Site `id_site`= 939
+<br>
+
+
+```{r}
+# Pour le site `939` : recherce de sites au nom similaire 
+cc<- data_site_transect |> filter(str_detect(site, "Saint-Ouen")) |> 
+  group_by(site_id) |>
+  unique()
+cc
+```
+```{r}
+cc1 <-cc$site_id[6]
+cc1
+
+```
+
+
+**Solution**: Mêmes coordonnées que le site 1484 et 5, qui sont a priori les mêmes sites!! **(À fusionner ou non problématique?)**
+
+
+
+```{r}
+# table comparaison sites 5, 939, 1484
+data_comp1 <- data |> filter(site_id==5 | site_id==939 | site_id==cc1)
+data_comp1
+```
+```{r}
+unique(data_comp1$user_id)
+```
+Encore lui!
+```{r}
+unique(data_comp1$structure_nom)
+```
+Encore ça!
+
+```{r}
+unique(data_comp1$site)
+```
+
+
+```{r}
+plans1 <- c(unique(data_comp1$site_id), unique(data_comp1$transect_coordonnees), unique(data_comp1$site_coordonnees))
+plans1
+```
+
+```{r}
+transects_noms <-  c(unique(data_comp1$site_id), unique(data_comp1$transect_coordonnees), unique(data_comp1$transect_nom))
+transects_noms
+```
+
+
+```{r}
+# Création de la carte Leaflet
+map <- leaflet() |>
+  addTiles() |>
+  #addPolylines(data = polyline(plans1[1]), color = "red", label='Transect du site 427') |>
+  #addPolylines(data = polyline(plans1[2]), color = "green", label='Transect du site 729') |>
+  #addLegend(colors="green", labels="transect site 729") |>
+  addPolygons(lng=polygone(plans1[11])[,1], 
+              lat= polygone(plans1[11])[,2], 
+              fillColor = "blue",                      # Couleur de remplissage
+              fillOpacity = 0.2) |>
+  addPolygons(lng=polygone(plans1[13])[,1], 
+              lat= polygone(plans1[13])[,2],
+              color='red',
+              fillColor = "red",                      # Couleur de remplissage
+              fillOpacity = 0.2) |>
+  addLegend(colors=c('blue','red'), labels=c('polygone site 5',"polygone site 1484"))
+
+# Affichage de la carte
+map
+```
+
+```{r}
+data_comp1 |> select(site_id, transect_coordonnees) |>
+  unique()
+```
+
+Carte des transects
+```{r}
+# Création de la carte Leaflet
+map <- leaflet() |>
+  addTiles() |>
+  addPolylines(data = polyline(plans1[8]), color = "red", label='Transect du site 1484') |>
+  addPolylines(data = polyline(plans1[9]), color = "orange", label='Transect du site 1484') |>
+  addPolylines(data = polyline(plans1[10]), color = "purple", label='Transect du site 1484') |>
+  addPolylines(data = polyline(plans1[7]), color = "green", label='Transect du site 939') |>
+  addLegend(colors="green", labels="transect site 729") |>
+  addPolygons(lng=polygone(plans1[13])[,1], 
+              lat= polygone(plans1[13])[,2], 
+              fillColor = "blue",                      # Couleur de remplissage
+              fillOpacity = 0.2) |>
+  addLegend(colors=c('blue','red', 'orange', 'purple'), labels=c('site 1484',"transect 1 site 1484", "transect 2 site 1484", "transect 3 site 1484"))
+
+# Affichage de la carte
+map
+```
+
++ Pour le site id = 5
+
+
+```{r}
+# Création de la carte Leaflet
+map <- leaflet() |>
+  addTiles() |>
+  addPolylines(data = polyline(plans1[4]), color = "red", label='Transect du site 5') |>
+  addPolylines(data = polyline(plans1[5]), color = "orange", label='Transect du site 5') |>
+  addPolylines(data = polyline(plans1[6]), color = "purple", label='Transect du site 5') |>
+  addPolylines(data = polyline(plans1[7]), color = "green", label='Transect du site 729') |>
+  addLegend(colors="green", labels="transect site 729") |>
+  addPolygons(lng=polygone(plans1[11])[,1], 
+              lat= polygone(plans1[11])[,2], 
+              fillColor = "blue",                      # Couleur de remplissage
+              fillOpacity = 0.2) |>
+  addLegend(colors=c('blue','red', 'orange', 'purple'), labels=c('site 5',"transect 1 site 5", "transect 2 site 5", "transect 3 site 5"))
+
+# Affichage de la carte
+map
+```
+
+
+
+
+## 5. Données manquantes Code postal et département
+<br>
+```{r}
+data_pb_cp <- data_site_transect |>
+  filter(is.na(site_departement)) 
+data_pb_cp 
+```
+Rajout des latitudes et longitudes moyennes (pas de problème avec les NaN)
+
+```{r}
+data_pb_cp |> 
+  select(site_id, site, site_coordonnees) |>
+  #filter(!is.na(site_coordonnees)) |>
+  unique() |>
+  mutate(long_moyenne = unlist(purrr::map(site_coordonnees, long_moy))) |>
+  mutate(lat_moyenne = unlist(purrr::map(site_coordonnees, lat_moy))) 
+```
+
+Recherche des codes postaux 
+Ici, il n'y a que 8 sites, donc on le fait à la main, à l'aide également de la localisation Google...
+
+
+```{r}
+print(unique(data_pb_cp$site_id))
+```
+
+Finalement, pour chaque site, on fait une recherche **à la main** des codes postaux correspondants (recherche par nom, vérification de la localisation par la moyenne des coordonnées)
+```{r}
+site_ids_a_completer <- c(20,128,271,417,729,939,1305,1306)
+codes_postaux <- c(35131, 59800, 22260,49300, NA, NA,  69730, 69730 )
+```
+
+
+**APARTE : J'ai vraiment un problème, je ne sais pas c'est quoi le format de l'id???**
+
+```{r}
+sites_id <- unique(data_site_transect$site_id)
+site1 <- sites_id[1]
+gsub(" ", "", site1)
+```
+
+```{r}
+resultat <- str_split_fixed(site1, "", n = Inf)
+resultat
+```
+
+```{r}
+code_utf8 <- utf8ToInt(resultat[2])
+code_utf8
+```
+ok il s'agit d'un espace insécable fin 
+```{r}
+esp_insec <- resultat[2]
+gsub(resultat[2], "", site1)
+```
+
++ On reformate les id 
+```{r}
+data_site_transect$site_id <- gsub(intToUtf8(8239),"", data_site_transect$site_id)
+```
+
+
+
+##### 4.2 Site `id_site`= 597
+<br>
+
+Démarche similiaire à précédemment pour compléter (par recherche de noms similaires)
+
+
+```{r}
+# recherche d'une correspondance par nom
+data_site_transect |> filter(str_detect(site, "Vincennes")) |> 
+  select(site_id, site) |>
+  unique()
+```
+
+```{r}
+data_comp2 <- data_site_transect |>
+  filter(site_id==34 | site_id==597) |>
+  unique()
+
+# site 34
+polygone_34 <- data_comp2$site_coordonnees[1]
+
+# Transect site 597
+transect_597 <- data_comp2$transect_coordonnees[data_comp2$site_id==597]
+```
+
+```{r}
+# liste des transects du site 34
+plans2 <- data_comp2$transect_coordonnees[data_comp2$site_id==34]
+## Il y en a 56!!!
+plans2[1:3]
+```
+
++ Création d'une carte avec le bois de Vincennes avec les transects des 2 sites_id
+
+```{r}
+
+# Création de la carte Leaflet
+ma_carte <- leaflet() |>
+  addTiles() |>
+  addPolylines(data = polyline(transect_597), color = "red", label='Transect du site 729') |>
+  addLegend(colors="red", labels="transect site 597") |>
+  addPolygons(lng=polygone(polygone_34)[,1], 
+              lat= polygone(polygone_34)[,2], 
+              fillColor = "blue",                      # Couleur de remplissage
+              fillOpacity = 0.2) |>
+  addLegend(colors=c('blue', 'blue'), labels=c('site 34', 'transects site 34'))
+
+
+# Ajout des polylignes à la carte avec une boucle
+for (i in seq_along(plans2)) {
+  ma_carte <- addPolylines(
+    map = ma_carte,
+    data = polyline(plans2[[i]]),
+    color = "blue",
+    weight = 2
+  )
+}
+
+# Affichage de la carte
+ma_carte
+```
+
+Il est clair que le transect sur `site_id`= 597 fait bien partie du Bois de Vincennes. 
+
+```{r}
+data |> filter(site_id==597)
+```
+```{r}
+data |> 
+  filter(site_id==34) |>
+  select(structure_id, structure_nom) |>
+  unique()
+  
+```
+En revanche, ce ne sont pas les même gestionnaires
+
+
+##### 4.2 Site `id_site`= 1382
+<br>
+
+
+```{r}
+data |>
+  filter(str_detect(site, "tropi"))
+```
+MAIS:
+
+Impossible de trouver dans la table une correspondance avec le Jardin d'agronomie tropicale (ni par nom, ni par département).
+Peut-être essayer de regarder l'usager qui a fait le relevé. 
+Cependant, Le Jardin est une entité du Bois de Vincennes, située à son extremité orientale (94 130, mais limitrophe 70012).
+Coordonnées (48.839839266697716, 2.46666394884083)!
+```{r}
+transect_1382 <- data_site_transect |>
+  filter(str_detect(site, "tropi")) |>
+  select(transect_coordonnees)
+
+transect_1382[1]
+```
+Carte du bois de vincennes
+```{r}
+# Création de la carte Leaflet
+ma_carte <- leaflet() |>
+  addTiles() |>
+  addPolylines(data = polyline(transect_1382), color = "red", label='Transect du site 1382') |>
+  addLegend(colors="red", labels="transect site 1382") |>
+  addPolygons(lng=polygone(polygone_34)[,1], 
+              lat= polygone(polygone_34)[,2], 
+              fillColor = "blue",                      # Couleur de remplissage
+              fillOpacity = 0.2) |>
+  addLegend(colors=c('blue', 'blue'), labels=c('site 34', 'transects site 34'))
+
+
+# Ajout des polylignes à la carte avec une boucle
+for (i in seq_along(plans2)) {
+  ma_carte <- addPolylines(
+    map = ma_carte,
+    data = polyline(plans2[[i]]),
+    color = "blue",
+    weight = 2
+  )
+}
+
+# Affichage de la carte
+ma_carte
+
+```
+
+Même remarque que précedemment : Entité indépendante du bois de Vincennes
+
+
+### 5. Quid des sites définis par un point et non un polygone?
+
+
+### 6. Carte des transects 
+
+
+Nouvelle table avec la localisation des transects
+
+```{r}
+data_site_transect$long <- sapply(data_site_transect$transect_coordonnees, long_moy)
+data_site_transect$lat <- sapply(data_site_transect$transect_coordonnees, lat_moy)
+```
+
+
++ Carte avec sf
+
+```{r}
+# carte de France
+# Charger le fichier GeoJSON
+sf_france_metro <- st_read("/Users/sariakasalomon-ramialison/Downloads/metropole.geojson")
+
+```
+
+
+```{r}
+sf_points <- st_as_sf(data_site_transect, coords = c("long", "lat"), crs = 4326)
+```
+
+`
+
+```{r}
+# Créer la carte
+ggplot() +
+  geom_sf(data = sf_france_metro) +
+  geom_sf(data = sf_points,
+          pch=20,
+          cex=0.2,
+          lwd=0.5,
+          col='red') +
+  #geom_text(data = data_site_transect, aes(x = long, y = lat, color = "black", size = 3) +
+  labs(title = "Localisation des transects") +
+  theme_minimal()
+
+```
+
++ Avec leaflet
+
+
+
+```{r}
+# Carte avec les clusters
+
+# Création de la carte Leaflet
+ma_carte <- leaflet(data_site_transect) |>
+  addTiles() |>
+  addMarkers(~long, ~lat, clusterOptions = markerClusterOptions()) |>
+  addControl(
+  html = "<h4>Carte des transects</h4>",
+  position = "topright")
+
+# Affichage de la carte
+ma_carte
+```
+
+### 6. Table des données géographique complétée
+
+
+#### 6.1 Remplacement des codes postaux 
+
+```{r}
+# Liste des sites restant sans code postal 
+site_ss_ref <- c(20,128,271,417,1305,1306)
+
+# codes postaux correspondants 
+codes_postaux <- c(35131, 59800, 22260, 49300, 69730, 69730)
+
+```
+
+```{r}
+# codes postaux et departement
+data_site_transect <- data_site_transect |> 
+  mutate(site_code_postal = case_when(
+    site_id == 20 ~ 35131,
+    site_id == 128 ~ 59800,
+    site_id == 271 ~ 35131,
+    site_id == 417 ~ 49300,
+    site_id == 1305 ~ 69730,
+    site_id == 1306 ~ 69730,
+    # Plus les 2 qui n'ont pas de coordonnées de site
+    site_id == 939 ~ 93400,
+    site_id == 729 ~ 93200,
+    TRUE ~ site_code_postal
+    )) |>
+   mutate(site_departement = site_code_postal %/% 1000) 
+```
+
+
+
+#### 6.2 Remplacement des coordonnées de sites manquants
+
+
+```{r}
+# remplacement coordonnées pour les 4 sites, et coordonnées + codes_postaux pour 939 et 729
+data_site_transect <- data_site_transect |> 
+  mutate(site_coordonnees = case_when(
+    site_id == 939 ~ as.character(unique(data_site_transect$site_coordonnees[data_site_transect$site_id==5])),
+    site_id == 729 ~ as.character(unique(data_site_transect$site_coordonnees[data_site_transect$site_id==427])),
+    site_id == 597 ~ as.character(unique(data_site_transect$site_coordonnees[data_site_transect$site_id==34])),
+    site_id == 1382 ~ as.character(unique(data_site_transect$site_coordonnees[data_site_transect$site_id==34])),
+    TRUE ~ site_coordonnees
+    ))
+```
+
+```{r}
+# Vérification s'il y a des NA dans le tibble
+if (anyNA(data_site_transect )) {
+  print("Le tibble `data_site_transect` contient des valeurs NA.")
+} else {
+  print("LE tibble `data_site_transect` ne contient pas de valeurs NA.")
+}
+```
