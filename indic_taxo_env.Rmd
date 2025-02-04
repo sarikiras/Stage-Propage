@@ -1,0 +1,619 @@
+---
+title: "Création de la table environnement"
+author: "Sariaka Ramialison"
+date: "2024-02-20"
+output: html_document
+---
+
+
+Dans ce document, je vais créer plusieurs versions de ma table environnement en fonction des analyses que je veux effectuer
+
+
+
+```{r, include=FALSE}
+library(readxl)
+library(tidyverse)
+```
+
+## 1. Récupération des données 
+
+```{r}
+knitr::read_chunk("data_clean.Rmd")
+```
+
+Nom des colonnes 
+```{r}
+colnames(data)
+```
+
+
+
+## 2. Première table généraliste - juste par habitat généraliste et conditions météo -
+
+
+#### 2.1 Création de la table propre, choix des colonnes 
+
+**Question ** : Quelles conditions météo et calendaires(?) sont le plus favorables à la diversité? Dans quels grands types d'habitats?
+
+Dans cette table, on garde :
+- id_relevé que l'on va transformer en index
+- transect_habitat
+- releve_date
+- heure_debut
+- heure_fin
+- temperature 
+- vent
+- couverture nuageuse
+
+```{r}
+data_env_1 <- data |>
+  select(id_releve, transect_habitat, releve_date,jour_julien, heure_debut, heure_fin, temperature, vent, couverture_nuageuse) |>
+  unique()
+data_env_1
+```
++ Problèmes sur les dates
+
+```{r}
+dates_indispo <- data_env_1[which(is.na(data_env_1$releve_date)),]
+dates_indispo
+```
+
+```{r}
+releves_sans_date <- unique(dates_indispo$id_releve)
+releves_sans_date
+```
+
+
+
++ On va enlever tous les NA : d'abord les dates 
+
+
+```{r}
+data_env_1_sans_na <- na.omit(data_env_1) |>
+  mutate(mois = month(as.Date(releve_date))) |>
+  mutate(duree_obs = heure_fin - heure_debut)
+  
+data_env_1_sans_na
+```
+Cool, je n'ai perdu "que" 12 observations de sessions! ce sont exactement les relevés sans date!
+
+```{r}
+unique(data_env_1_sans_na$transect_habitat)
+```
+```{r}
+unique(data_env_1_sans_na$vent)
+```
+
+```{r}
+unique(data_env_1_sans_na$couverture_nuageuse)
+```
+
+```{r}
+unique(data_env_1_sans_na$temperature)
+```
+
+```{r}
+unique(data_env_1_sans_na$mois)
+```
+
++ Problèmes sur les mois, ce n'est pas normal qu'il y ait des relevés en janvier!
+
+
+```{r}
+data_temp_pb <- data_env_1_sans_na |>
+  #filter(!mois %in% c(5, 6, 7, 8, 9)) |>
+  mutate (temp_moy = case_when(
+    temperature == "<13°C" ~ 10,
+    temperature == "13-15°C" ~ 14,
+    temperature == "16-20°C" ~ 18,
+    temperature == "21-25°C" ~ 23,
+    temperature == "26-30°C" ~ 28,
+    temperature == "31-35°C" ~ 33,
+    temperature == ">35°C" ~ 36
+  ))
+```
+
+
+```{r}
+ggplot(
+  data = data_temp_pb,
+  mapping = aes(x = mois, y = temp_moy)
+  )+
+  geom_point()+
+  scale_x_discrete(name = "Mois", labels =c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12), breaks = c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12))+
+  labs()
+```
+```{r}
+data_temp_pb |> 
+  filter(mois==1)
+```
+```{r}
+data_temp_pb$id_releve[data_temp_pb$mois==1]
+```
+
+
+#### 2.2 Création de nouvelles colonnes exploitables
+
+On va créer comme variable le mois de l'observation, la durée de l'observation, l'heure de début et de fin
+
+
+```{r}
+data_env_1_sans_na <- data_env_1_sans_na |>
+  mutate(mois = month(as.Date(releve_date))) |>
+  mutate(duree_obs = heure_fin - heure_debut) |>
+  mutate(heure_debut_releve = format(heure_debut, "%H")) |>
+  mutate(heure_fin_releve = format(heure_fin, "%H")) 
+  #select(-heure_debut, -heure_fin)
+data_env_1_sans_na
+```
+```{r}
+# Durée d'observation négatives 
+obs_neg <- data_env_1_sans_na |>
+  filter(duree_obs < 0)
+obs_neg
+```
+```{r}
+sort(unique(obs_neg$heure_fin))
+```
+
+```{r}
+second(obs_neg$heure_fin[1])
+```
+
++ Parmi ces observations négatives : celles dont l'heure de fin de relevé est chelou [49]
+
+```{r}
+obs_neg$heure_fin[31]
+```
+```{r}
+obs_neg |>
+  filter(heure_fin != obs_neg$heure_fin[31]) |>
+  inner_join(select(data, id_releve, structure_nom), by = "id_releve") |>
+  unique()
+```
+
+```{r}
+# heure de fin de releve chelou [bug ????]
+# obs_neg |>
+#   filter(heure_fin!=cc$heure_fin[cc$id_releve==17403])
+```
+
+```{r}
+obs_neg$id_releve[obs_neg$heure_fin!=obs_neg$heure_fin[obs_neg$id_releve==17403]]
+```
++ Parmi ces observations négatives : celles dont l'heure de fin de relevé est nulle [516]
+
+```{r}
+obs_neg |>
+  filter(heure_fin == obs_neg$heure_fin[31]) |>
+  inner_join(select(data, id_releve, structure_nom), by = "id_releve") |>
+  unique() |>
+  filter(transect_habitat == "Prairie")
+```
+
+```{r}
+obs_nul <- data_env_1_sans_na |>
+  filter(duree_obs == 0)
+obs_nul
+  
+```
+
+
+
+
+```{r}
+unique(data_env_1_sans_na$heure_debut_releve)
+```
+
+
+```{r}
+data_env_1_sans_na |>
+  filter(duree_obs > 3600)
+```
+```{r}
+data_env_1_sans_na |>
+  filter(duree_obs > 3600) |>
+  filter(heure_debut == obs_nul$heure_debut[2])
+```
+
+
+#### 2.3 Table env_1 clean
+
+On va créer une table d'environnement clean avec laquelle on va travailler. On garde par exemple
+- uniquement les relevés de mai à août [edit 22/03 on va travailler sur les dates théoriques + ou - 15 jours ]
+- les relevés compris entre 5 et 20 minutes
+
+```{r}
+data_env_1_clean <- data_env_1_sans_na |>
+  #filter(month(releve_date) %in% c(5, 6, 7, 8)) |>
+  filter(jour_julien %in% jours_releves_possibles) |>
+  filter(duree_obs >= 300 & duree_obs <= 1200)
+data_env_1_clean
+unique(data_env_1_clean$duree_obs)
+```
+
+Il reste 12725 relevés (86.5% des relevés)
+```{r}
+summary(data_env_1_clean)
+```
+```{r}
+write.csv(data_env_1_clean,
+          "tables/data_env_1_clean.csv",
+          row.names = FALSE)
+```
+
+#### 2.4 Pour aller plus loin: étude plus appronfondie durée obs
+
+```{r}
+# Définition de l'heure 00:00:00
+H0 <-  obs_neg$heure_fin[obs_neg$id_releve==17403]
+H0
+```
+
+
++  Sélection des relevés pour lesquels on veut faire l'étude :
+
+- 516 relevés [uniquement Prairies] sans heure de fin.
+- 49 relevés avec une heure de fin de relevé chelou [bug sur la saisie?] 
+- 7 relevés avec une heure de début égale à l’heure de fin 
+- 13 relevés sans heure de début
+
+```{r}
+# Sélection des relevés pour lesquels on veut faire l'étude:
+df_etude_duree <- data_env_1|>  # on a gardé les NA sur les dates 
+  mutate(duree_obs = heure_fin - heure_debut) |>
+  filter(duree_obs <= 0 | heure_debut == H0) |>
+  inner_join(select(data, id_transect, id_releve), by = "id_releve") |>
+  mutate(id_transect_annee = paste0(id_transect,"_", year(releve_date))) |>
+  unique()
+df_etude_duree
+```
+
+
++ Que regarder? 
+
+Pour un relevé chelou, regarder sur les releves du meme transect, si les 10 min sont bien respectées. Si oui, on peut considérer que le relevé a été bien fait et qu'il s'agit d'une erreur.
+
+A-t-on des répétitions de transects?
+
+```{r}
+# nombre de transects concernés
+length(unique(df_etude_duree$id_transect))
+```
+137 transects pour 597 relevés 
+
+Exemple : transect "125_Pto Jardin Botanique 2"
+
+```{r}
+data_env_1|>
+  inner_join(select(data, id_transect, id_releve), by = "id_releve") |>
+  mutate(duree_obs = heure_fin - heure_debut) |>
+  select(-jour_julien, -temperature, -transect_habitat, -heure_debut, -heure_fin) |>
+  unique() |>
+  mutate(id_transect_annee = paste0(id_transect, "_", year(releve_date))) |>
+  filter(id_transect_annee == "178_Sévines - nouveau tennis couvert_2017")
+```
+
+**Critère de curation**:
+
+```{r}
+# liste des transects à étudier par année
+liste_to_study <- unique(df_etude_duree$id_transect_annee)
+
+# Table des autres releves des transects à étudier 
+table_duree_obs <- data_env_1|>
+  inner_join(select(data, id_transect, id_releve), by = "id_releve") |>
+  mutate(duree_obs = heure_fin - heure_debut) |>
+  select(-jour_julien, -temperature, -transect_habitat, -heure_debut, -heure_fin) |>
+  unique() |>
+  mutate(id_transect_annee = paste0(id_transect, "_", year(releve_date))) 
+table_duree_obs
+```
+
+```{r}
+# Exemple 
+table_duree_obs |>
+  filter(id_transect_annee == liste_to_study[10])
+```
+
++ Premier essai de curation
+
+Si sur le même transect, sur la même année, il y a eu des relevés de 600s, on peut considérer que le relevé est à garder [et on le met à 600s]
+
+```{r}
+# on recupère les id_releve pour lequels on effectue la correction dans `df_etude_duree`
+id_a_corriger <- c()
+for (trans in liste_to_study){
+  if (600 %in% table_duree_obs$duree_obs[table_duree_obs$id_transect_annee == trans]){
+    id_a_corriger <- c(id_a_corriger, df_etude_duree$id_releve[df_etude_duree$id_transect_annee == trans])
+  }
+}
+id_a_corriger
+```
+
+Cela ne fait que 38 releves à corriger sur 597!
+
++ Deuxième essai de curation
+
+Si sur le même transect, sur *toutes* les années, il y a eu des relevés à 600s, on peut considérer que le relevé est à garder [et on le met à 600s]
+
+```{r}
+# on crée la liste des transects
+liste_to_study_large <- unique(df_etude_duree$id_transect)
+
+# Exemple 
+table_duree_obs |>
+  filter(id_transect == liste_to_study_large[10])
+```
+```{r}
+# on recupère les id_releve pour lequels on effectue la correction dans `df_etude_duree`
+id_a_corriger_large <- c()
+for (trans in liste_to_study_large){
+  if (600 %in% table_duree_obs$duree_obs[table_duree_obs$id_transect == trans]){
+    id_a_corriger_large <- c(id_a_corriger_large, df_etude_duree$id_releve[df_etude_duree$id_transect == trans])
+  }
+}
+id_a_corriger_large
+```
+Un peu mieux, cela fait 66 relevés à corriger sur 597
+
++ 3ème essai de curation
+
+Si sur le même transect, sur une  années, il y a eu des relevés entre 5 et 20 min, on peut considérer que le relevé est à garder [et on le met à 600s]
+
+```{r}
+# on recupère les id_releve pour lequels on effectue la correction dans `df_etude_duree`
+id_a_corriger <- c()
+for (trans in liste_to_study){
+  if (sum(sapply(table_duree_obs$duree_obs[table_duree_obs$id_transect_annee == trans], 
+                 function(x){return(x >= 300 & x <= 1200)})
+          ) >= 1
+  ){
+    id_a_corriger <- c(id_a_corriger, df_etude_duree$id_releve[df_etude_duree$id_transect_annee == trans])
+  }
+}
+id_a_corriger
+```
+53 transects à garder si on est moins rigides sur le temps passé
+
++ 4ème essai de curation
+
+Si sur le même transect, sur toutes les années, il y a eu des relevés entre 5 et 20 min, on peut considérer que le relevé est à garder [et on le met à 600s]
+
+```{r}
+# on recupère les id_releve pour lequels on effectue la correction dans `df_etude_duree`
+id_a_corriger_large <- c()
+for (trans in liste_to_study_large){
+  if (sum(sapply(table_duree_obs$duree_obs[table_duree_obs$id_transect == trans], 
+                 function(x){return(x >= 300 & x <= 1200)})
+          ) >= 1
+  ){
+    id_a_corriger_large <- c(id_a_corriger_large, 
+                             df_etude_duree$id_releve[df_etude_duree$id_transect == trans])
+  }
+}
+id_a_corriger_large
+```
+On a gardé 76 relevés ok.
+
+
+## 3. Deuxième table par gestion
+
+#### 3.1 Un exemple : gestion de square urbain
+
+```{r}
+colnames(data)
+```
+
+
+```{r}
+data_env_squ <- data |>
+  filter(transect_habitat=="Square urbain (mixte surface pelouse / surfaces non végétalisée)") |>
+  select(-31:-37, -40:-51, -74:-77) |>
+  unique()
+data_env_squ
+```
+Il nous reste 1881 observations dans les squares
+
+```{r}
+sum(!is.na(data_env_squ$traitements_phyto_autre))
+sum(!is.na(data_env_squ$paturages_autre))
+sum(!is.na(data_env_squ$frequence_travail_sol_autre))
+sum(!is.na(data_env_squ$frequence_travail_sol_regulier))
+sum(!is.na(data_env_squ$frequence_amendement_autre))
+sum(!is.na(data_env_squ$travaux_anterieurs_autre))
+sum(!is.na(data_env_squ$travaux_sol_anterieurs_autre))
+sum(!is.na(data_env_squ$objectifs_autre)) # pas celui-ci
+```
+
+```{r}
+data_env_squ <- data_env_squ |>
+  select(-traitements_phyto_autre, -paturages_autre, -frequence_travail_sol_regulier, -frequence_travail_sol_autre, -frequence_amendement_autre, -travaux_anterieurs_autre, - travaux_sol_anterieurs_autre)
+```
+
+
+```{r}
+data_env_squ
+```
+
+#### 3.2 Gestion des prairies
+
+```{r}
+colnames(data)
+```
+
+
+```{r}
+data_env_prai <- data |>
+  filter(transect_habitat=="Prairie") |>
+  select(-2:-12, -29, -35:-51, -74:-77) |>
+  unique()
+data_env_prai
+```
+##### 3.2.1 Curation fauches 
+
+
+```{r}
+rythme_fauche_NA <- data_env_prai |>
+  filter(is.na(transect_rythme_fauchage_prairie))
+rythme_fauche_NA
+```
+```{r}
+unique(rythme_fauche_NA$periodes_fauches)
+```
+```{r}
+unique(rythme_fauche_NA$frequence_fauches)
+```
+Pour curer `transect_rythme_fauche`:
+
+1. si periodes_fauches ==  "> 2/an" ou "2/an" : je remplace par "Plusieurs fauches"
+
+"[]" ou "[\"espaces-verts.periodes-fauches.je-ne-sais-pas\"]" : je supprime
+
+
+```{r}
+# correction des plusieurs fauches
+data_env_prai <- data_env_prai |>
+  mutate(transect_rythme_fauchage_prairie = case_when(
+      (is.na(transect_rythme_fauchage_prairie) & (frequence_fauches=="> 2/an" | frequence_fauches =="2/an")) ~ "Plusieurs fauches",
+      TRUE ~ transect_rythme_fauchage_prairie)) 
+```
+
+2. 
+- si periodes_fauches == "[\"espaces-verts.periodes-fauches.tardive-(septembre---decembre)\"]" : je remplace par "Fauche tardive" 
+- si periodes_fauches == "[\"espaces-verts.periodes-fauches.precoce-(janvier-mai)\"]" : je remplace par "Fauche précoce
+
+```{r}
+# Correction des fauches tardives
+data_env_prai <- data_env_prai |>
+  mutate(transect_rythme_fauchage_prairie = case_when(
+      (is.na(transect_rythme_fauchage_prairie) & (periodes_fauches == "[\"espaces-verts.periodes-fauches.tardive-(septembre---decembre)\"]")) ~ "Fauche tardive",
+      TRUE ~ transect_rythme_fauchage_prairie)) 
+```
+
+```{r}
+data_env_prai |>
+  filter(is.na(transect_rythme_fauchage_prairie) & (periodes_fauches == "[\"espaces-verts.periodes-fauches.precoce-(janvier-mai)\"]"))
+```
+
+```{r}
+rythme_fauche_NA |>
+  filter(periodes_fauches == "[\"espaces-verts.periodes-fauches.precoce-(janvier-mai)\"]")
+```
+
+Il n'y a plus de fauche précoce....
+
+3. Si Fauche == "Pas de fauche(s) / tonte(s)" : je remplace par "Non fauchée"
+
+```{r}
+# Correction des non fauchées
+data_env_prai <- data_env_prai |>
+  mutate(transect_rythme_fauchage_prairie = case_when(
+      (is.na(transect_rythme_fauchage_prairie) & (fauche == "Pas de fauche(s) / tonte(s)")) ~ "Non fauchée",
+      TRUE ~ transect_rythme_fauchage_prairie)) 
+```
+
+
+4. Et le reste...
+
+```{r}
+data_env_prai |>
+  filter(is.na(transect_rythme_fauchage_prairie))
+```
+Il reste 164 lignes non renseignées sur 6425, soit 2,5 %.
+
+Essayer de voir si les fauches estivales correspondent plutôt à des fauches tardives ou pas. Je n'enlève pas pour l'instant
+
+##### 3.2.2 Curation pâturages colonne `transect_paturage_prairie`
+
+```{r}
+unique(data_env_prai$transect_paturage_prairie)
+```
+
+
+```{r}
+df_NA_paturage <- data_env_prai |>
+  filter(is.na(transect_paturage_prairie)) |>
+  select(id_releve, transect_paturage_prairie, paturages, paturages_autre)
+df_NA_paturage
+```
+Au départ 176 `NA`dans la colonne `transect_paturage_prairie`
+
+```{r}
+unique(df_NA_paturage$paturages)
+```
+Curation, pour les valeurs `NA`
+
+1. si paturages ==  ""[\"espaces-verts.paturages.pas-de-paturage\"]"" : je remplace par "Non pâturée"
+
+2. si paturages ==  "[\"espaces-verts.paturages.ovin\"]"                                   
+ou "[\"espaces-verts.paturages.bovin\", \"espaces-verts.paturages.ovin\"]"
+ou "[\"espaces-verts.paturages.bovin\"]"                                  
+ou "[\"espaces-verts.paturages.equide\"]"  " : je remplace par "Pâturée"
+
+3. sinon je ne fais rien 
+
+
+```{r}
+# Correction des `NA` dans `transect_paturage_prairie`
+data_env_prai |>
+  mutate(transect_paturage_prairie = case_when(
+      (is.na(transect_paturage_prairie) & (paturages ==  "[\"espaces-verts.paturages.pas-de-paturage\"]")) ~ "Non pâturée",
+      (is.na(transect_paturage_prairie) & (paturages == "[\"espaces-verts.paturages.ovin\"]" |
+                                           paturages == "[\"espaces-verts.paturages.bovin\"]" |
+                                           paturages == "[\"espaces-verts.paturages.bovin\", \"espaces-verts.paturages.ovin\"]" |
+                                           paturages ==  "[\"espaces-verts.paturages.equide\"]")) ~ "Pâturée",
+       TRUE ~ transect_paturage_prairie)) |>
+  filter(is.na(transect_paturage_prairie)) |>
+  select(id_releve, transect_paturage_prairie, paturages, paturages_autre)
+```
+
+Il reste 89 lignes sur 6425 (1,4 %)
+
+```{r}
+data_env_prai
+```
+
+## 4. Données avec la fiche gestion renseignée - en particulier à partir de semis.sursemis
+
+```{r}
+data_env_2 <- data |>
+  select(id_releve, 59:73) |>
+  filter(!is.na(semis_sursemis)) |>
+  unique()
+data_env_2
+```
+
+```{r}
+unique(data_env_2$traitements_phyto)
+```
+Voilà pourquoi il n'y a aucune valeur `NA`, car la colonne est toujours renseignée. 
+
++ Je remplace les "[]" par `NA
+`
+```{r}
+data_env_2$traitements_phyto[data_env_2$traitements_phyto=="[]"] = NA
+data_env_2 |>
+  filter(is.na(traitements_phyto))
+```
+Sur les 14702 sessions, on a 11282 sessions sans aucun renseignement sur le traitement phyto. Les 3420 restants correspondent peut être aux nouveaux relevés....
+
+```{r}
+# petit rappel nouveaux relevés
+data |>
+  group_by(id_releve) |>
+  summarise(n=n()) |>
+  filter(n==39)
+```
+En théorie il y en a 3452
+
++ Groupement traitement phyto : Oui/Non/NA 
+
+- Non : aucun
+- Oui : Herbicide/fongicide etc et AUTRE 
+- NA : Je ne sais pas 
+
+```{r}
+
+```
+

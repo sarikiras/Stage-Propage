@@ -1,0 +1,476 @@
+---
+title: "EDA"
+author: "Sariaka Ramialison"
+date: "2024-02-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(viridis)
+library(readxl)
+library(reshape2)
+```
+
+
+## 1. Statistiques descriptives globales 
+
+```{r}
+knitr::read_chunk("data_clean.Rmd")
+```
+
+
+#### 1.1 Statistiques sur les sessions 
+
+```{r}
+sessions <- data |>
+  select(id_releve, releve_date) |>
+  unique() |>
+  mutate(annee = year(releve_date)) 
+sessions
+```
+A retenir : 14702 sessions!
+
+
+```{r, cache=TRUE}
+sessions |>
+  filter(is.na(annee))
+```
++ Evolution du nombre de sessions 
+
+12 sessions sans date, on les enlève, cela correspond à 0.08 % des sessions d'observation!
+
+```{r}
+data_time <- data |>
+  filter(!is.na(year(releve_date)))
+
+sessions <- sessions |>
+  filter(!is.na(annee))
+```
+
+Evolution du nombre de sessions par année 
+
+```{r}
+sess_ann <- sessions |> 
+  group_by(annee) |>
+  summarise(n = n())
+```
+
+
+```{r}
+
+ggplot(sess_ann, aes(x=annee, y=n)) +
+  geom_line() +
+  theme_minimal() +
+  labs (title = "Évolution du nombre de sessions") +
+  xlab("Année") +
+  scale_x_continuous(breaks = sess_ann$annee, labels = 2009:2023)+
+  ylab("Nombre de sessions")
+```
+
+#### 1.2 Statistiques sur les transects
+
+
+`data_time` est la table dans laquelle on a enlevé les `NA` sur les dates
+
+`transects`est une table dans laquelle j'ai toutes les informations de nom, géographique et d'habitat, et de date de relevé 
+
+
+```{r}
+transects <- data |>
+  select(id_releve, id_transect, transect_coordonnees, releve_date, transect_habitat) |>
+  unique() |>
+  mutate(annee = year(releve_date))
+transects
+```
+
+
+```{r}
+# Tableau qui permet de lister le nombre de transects, ainsi que le nombre de sessions effectuées dans ce transect 
+transects |>
+  group_by(id_transect) |>
+  summarise(nb_sessions=n())
+```
+1753 transects au total
+
+
+##### 1.2.1 Régularité des suivis  des transects
+
+Nombre de sessions par transects sur toutes les années (pour voir lesquelles ont été le plus suivi)
+
+```{r}
+lines <- seq(1, 45, by = 3)
+
+transects |>
+  group_by(id_transect) |>
+  summarise(nb_sessions=n()) |>
+  ggplot(aes(nb_sessions)) +
+    geom_histogram(binwidth = 0.5, fill = viridis(1)[1]) +
+    geom_vline(xintercept = lines, color = "red", linetype = "dashed", size = 0.2) +
+    theme_minimal() +
+    scale_fill_viridis_c() +
+    labs(
+      title = "Distribution du nombre de sessions par transect",
+      x = "Nombre de sessions",
+      y = "Nombre de transects") 
+
+```
+
+Pourquoi y a t il des transects qui ont été parcourus plus de 45 fois?
+
+```{r}
+transects |>
+  group_by(id_transect) |>
+  summarise(nb_sessions=n()) |>
+  filter(nb_sessions > 45)
+```
+
+9 transects ont été parcourus plus de 45 fois : quel excès de zèle!!!
+
+```{r}
+# Exemple du transect "83_chemin de l orangerie"
+transects |>
+  filter(id_transect=="83_chemin de l orangerie") 
+```
+```{r}
+# Exemple du 63_chemain de l orangerie
+# Combien de fois ce site a t'il été parcouru par année
+transects |>
+  filter(id_transect=="83_chemin de l orangerie") |>
+  ggplot(aes(annee)) +
+    geom_bar() +
+    geom_hline(yintercept = 3, color = "red", linetype = "dashed", size = 0.2) +
+    theme_minimal() +
+    labs(title = "Nombre de sessions par an pour le transect '83_chemin de l orangerie'")
+```
+
++ Evolution du nombre de transects dans le temps 
+
+```{r}
+transects |>
+  group_by(id_transect, annee) |>
+  summarise(n=n()) |>
+  group_by(annee) |>
+  summarise(nb_transects = n()) |>
+  ggplot(aes(x=annee, y=nb_transects)) +
+    geom_line() +
+    theme_minimal() +
+    labs (title = "Évolution du nombre de transects") +
+    xlab("Année") +
+    scale_x_continuous(breaks = sess_ann$annee, labels = 2009:2023)+
+    ylab("Nombre de transects")
+```
+
+##### 1.2.2 Etude plus fine en selectionnant les transects à [au moins] 3 relevés aux dates tolérées dans l'année
+
+```{r}
+# Data Frame des transects "correctement" suivis 3 fois sur une année (ie à ± 15 j des dates exactes)
+data_3_releves <- data |>
+  select(id_transect, releve_date, jour_julien, id_releve) |>
+  mutate(annee = year(releve_date)) |>
+  unique() |>
+  mutate(id_transect_annee = paste0(id_transect, "_", annee)) %>%
+  filtre_df_3_releves(., 15) |> 
+  select(-id_releve, -releve_date, -jour_julien) |>
+  unique()
+data_3_releves
+```
+
+```{r}
+data_3_releves |>
+  group_by(id_transect) |>
+  summarise(nb_annee_suivi=n()) %>%
+  ggplot(aes(nb_annee_suivi)) +
+    #geom_histogram(binwidth = 0.5, fill = viridis(1)[1]) +
+    geom_bar(width = 0.5, fill = viridis(1)[1]) +
+    theme_minimal() +
+    scale_fill_viridis() +
+    labs(
+      title = paste("Distribution des transects avec 3 relevés corrects/an (± 15 jours) \nNombre de transects :", length(unique(data_3_releves$id_transect))),
+      x = "Nombre d'années de suivi",
+      y = "Nombre de transects") 
+```
+```{r}
+# Je viens de découvrir un truc par hasard! c'est juste incroyable cette table!
+mat <- table(data_3_releves$id_transect, data_3_releves$annee)
+df_long_mat <- as.data.frame(mat) |>
+  rename("id_transect" = "Var1", "annee" = "Var2")
+df_long_mat
+```
+
+```{r}
+# Créer le graphique avec ggplot2
+annee_ref <- 2009
+
+df_long_mat |>
+  filter(id_transect %in% data_3_releves$id_transect[data_3_releves$annee == annee_ref]) |>
+  ggplot(aes(x = annee, y = id_transect, fill = factor(Freq))) +
+    geom_tile(color = "white") +
+    scale_fill_manual(values = c("white", "skyblue"), labels = c("0" = "Non suivi", "1" = "Suivi")) +
+    labs(x = "", y = "") +
+    theme_minimal() +
+    theme(axis.text.y = element_blank()) +
+    labs(title = paste("Suivi des transects de l'année", annee_ref),
+         fill = "")
+```
+
+##### 1.2.3 [21 Aout] Nombre de transects selon le nombre de relevés effectués par an
+
+```{r}
+# On utilise la fonction `filtre_bon_releves`: il filtre déjà un transect unique par période i.e.
+# si plusieurs dates : celle la plus proche de la date théorique
+# si plusieurs passages le même jour : le dernier passage enregistré
+
+data_bons_releves <- data |>
+  select(id_transect, releve_date, jour_julien, id_releve) |>
+  mutate(annee = year(releve_date)) |>
+  unique() |>
+  mutate(id_transect_annee = paste0(id_transect, "_", annee)) %>%
+  filtre_bon_releves(., 15) |> 
+  select(-releve_date, -jour_julien) |>
+  unique()
+data_bons_releves
+```
+```{r}
+data_bons_releves |>
+  group_by(annee, id_transect) |>
+  summarise(n = n()) |>
+  group_by(annee, n) |>
+  summarise(nb_transects =n()) 
+```
+
+```{r}
+data_bons_releves |>
+  group_by(annee, id_transect) |>
+  summarise(n = n()) |>
+  group_by(annee, n) |>
+  summarise(nb_transects =n()) |>
+  mutate(n = factor(n, levels = c(1,2,3))) |>
+  ggplot(aes(x=annee, y = nb_transects, fill = n)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    theme_minimal() +
+    scale_fill_viridis_d() +
+      labs(x = "Années", 
+         y = "Nombre de transects", 
+         title = "", 
+         fill="Nb passages") +
+    scale_fill_viridis_d() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+```
+
+
+
+#### 1.3 Répartition des habitats des sessions
+
+
+Pour ça, je n'ai pas besoin d'enlever les dates. Comme ça on garde l'info totale. 
+
+```{r}
+repart_hab <- data |>
+  distinct() |>
+  select(id_releve, transect_habitat) |>
+  unique() |>
+  group_by(transect_habitat) |>
+  summarise(n = n()) |>
+  mutate(proportion = paste(round(n/sum(n)*100, 1), "%")) |>
+  arrange(n, desc=TRUE) |>
+  mutate(transect_habitat=factor(transect_habitat, levels=transect_habitat))
+repart_hab
+```
+```{r}
+sum(repart_hab$n)
+```
+
++ Table de répartition des habitats avec simplification des noms des habitats 
+
+```{r}
+repart_hab_c <- repart_hab |>
+  arrange(n, desc=TRUE) |>
+  mutate(transect_habitat=factor(transect_habitat, levels=transect_habitat))
+repart_hab_c
+```
+
+
+```{r}
+ggplot(repart_hab_c, aes(x=n, y=transect_habitat, fill=transect_habitat)) +
+  geom_bar(stat="identity", fill=viridis(8)) +
+  geom_text(aes(label = proportion), vjust = 0.5, hjust = -0.2, color = "black", size = 3) +
+  theme_minimal() +
+  xlim(0, 7000) +
+  labs (title = "Répartition des habitats", y = "Habitat", x="Nombre de sessions")
+  #xlab("")
+```
+
+#### 1.4 Répartition des habitats des transects
+
+Selon Martin, certains transects ont changé d'habitat dans le temps???? A voir 
+
+```{r}
+transects |>
+  group_by(id_transect, transect_habitat) |>
+  summarise(nb_sessions=n()) |>
+  unique()
+```
+1833 transects (contre 1754 si on ne groupe que par id_transect) : ce qui signifie qu'il y a bien des transects qui ont changé d'habitat!! a priori 79
+
+A Etudier plus tard `transectchgt_hab.Rmd`
+
+On reprend notre étude de répartition des transects
+
+```{r}
+repart_hab_transects <- transects |>
+  group_by(id_transect, transect_habitat) |>
+  mutate(transect_habitat = case_when(
+    transect_habitat == "Gazon" ~ "Pelouse",
+    TRUE ~ transect_habitat
+  )) |>
+  summarise(nb_sessions=n()) |> 
+  group_by(transect_habitat) |>
+  summarise(nb_transects=n()) |>
+  mutate(proportion = paste(round(nb_transects/sum(nb_transects)*100, 1), "%")) |>
+  arrange(nb_transects, desc=TRUE) |>
+  mutate(transect_habitat = factor(transect_habitat, levels=transect_habitat)) |>
+  mutate(lab_xpos = nb_transects-0.5*nb_transects) |> # position du texte dans la barre
+  ggplot(aes(x=nb_transects, y=transect_habitat, fill=transect_habitat)) +
+    geom_bar(stat="identity", fill=viridis(8), width = 0.5) +
+    #geom_text(aes(x = lab_xpos, label = proportion), color = "white", size = 3) +
+    geom_text(aes(label = proportion), vjust = 0.5, hjust = -0.2, color = "black", size = 3) +
+    theme_minimal() +
+    xlim(0, 900) +
+    #labs (title = "Répartition des habitats des transects", y = "Habitat", x="Nombre de transects") 
+    labs(title = "", y = "Habitat", x="Nombre de transects") 
+repart_hab_transects
+```
+Tiens tiens, plus de sessions dans les Squares urbains par rapport à Gazon, pourtant moins de transects =>
+il ont été mieux suivis. 
+
+```{r}
+#ggsave("repart_hab_transects.png", repart_hab_transects)
+```
+
+
+#### 1.5 Etude des 79 transects qui ont changé d'habitat? (4,3 % des transects)
+
+```{r}
+transect_chg_hab <- transects |>
+  group_by(id_transect, transect_habitat) |>
+  summarise(nb_sessions=n()) |>
+  group_by(id_transect) |>
+  summarise(nb_habitats=n(), liste_hab = paste(transect_habitat, collapse = ", ")) |>
+  filter(nb_habitats !=1)
+transect_chg_hab
+```
+Pourquoi je n'ai que 76 alors que j'en avais comptabilisé 79?
+Quelles combinaisons
+```{r}
+unique(transect_chg_hab$liste_hab)
+```
+
+```{r}
+transect_chg_hab |>
+  group_by(liste_hab) |>
+  summarise(n=n()) |>
+  arrange(n, desc = TRUE) |>
+  mutate(liste_hab = factor(liste_hab, levels=liste_hab)) |>
+  ggplot(aes(x=n, y=liste_hab, fill=liste_hab)) +
+    geom_bar(stat="identity", fill=viridis(20)) +
+    theme_minimal() +
+    labs (title = "Changements d'habitats", y = "", x="")
+  
+```
+Ce qui est intéressant : Gazon -> Prairie -> Friche
+
+```{r}
+co_occurrence_habitats <- transects |>
+  inner_join(transect_chg_hab, by="id_transect") |>
+  select(id_transect, transect_habitat) |>
+  unique() |>
+  mutate(bin=1) |>
+  pivot_wider(names_from = transect_habitat, values_from = bin, values_fn = sum) %>%
+  replace(is.na(.),0) |>
+  column_to_rownames("id_transect")
+co_occurrence_habitats
+```
+
+```{r}
+heatmap(as.matrix(co_occurrence_habitats), Colv = NA, Rowv = NA)
+```
+
+
+
+```{r}
+# # Créez le heatmap avec ggplot2
+# heatmap <- ggplot(data_long_coc, aes(x = Var2, y = Var1, fill = value)) +
+#   geom_tile(color = "white") +
+#   scale_fill_gradient(low = "white", high = "blue") + # Choisissez vos couleurs préférées
+#   labs(x = "Variables", y = "Observations", title = "Heatmap de Co-occurrence") +
+#   theme_minimal() +
+#   theme(axis.text.x = element_text(angle = 45, hjust = 1)) # Pour faire pivoter les étiquettes de l'axe x
+# 
+# # Affichez le heatmap
+# print(heatmap)
+```
+
+
+## 2. Chiffres pour le rapport 
+
+J'ai besoin du nombre de transects qui ont été parcourus les 3 fois.
+
+```{r}
+transects_a_filtrer <- data |>
+  select(id_releve, id_transect, transect_coordonnees, releve_date, transect_habitat, jour_julien) |>
+  unique() |>
+  mutate(annee = year(releve_date)) |>
+  mutate(id_transect_annee = paste0(id_transect, "_", annee))
+transects_a_filtrer
+```
+
+
+```{r}
+# Les relevés à conserver! Normalement, 3 par id_transect_année
+releves_corrects <- filtre_df_3_releves(transects_a_filtrer, 15)
+```
+
+```{r}
+# Vérification du nombre de transects parcourus les 3 fois aux bonnes dates 
+releves_corrects |>
+  group_by(id_transect_annee) |>
+  summarise(n = n())
+```
+
+```{r}
+# Nombre de transects à garder dans les prairies /Gazon
+nrow(releves_corrects |>
+       #filter(transect_habitat == "Prairie") |>
+       filter(transect_habitat == "Gazon") |>
+       group_by(id_transect_annee) |>
+       summarise(n = n()))
+```
+
++ Graphique à partir de cette table 
+
+
+```{r}
+repart_hab_transects_an <- releves_corrects |>
+  group_by(id_transect_annee, transect_habitat) |>
+  summarise(nb_sessions=n()) |>
+  group_by(transect_habitat) |>
+  summarise(nb_transects=n()) |>
+  mutate(proportion = paste(round(nb_transects/sum(nb_transects)*100, 1), "%")) |>
+  arrange(nb_transects, desc=TRUE) |>
+  mutate(transect_habitat = factor(transect_habitat, levels=transect_habitat)) |>
+  mutate(lab_xpos = nb_transects-0.5*nb_transects) |> # position du texte dans la barre
+  ggplot(aes(x=nb_transects, y=transect_habitat, fill=transect_habitat)) +
+    geom_bar(stat="identity", fill=viridis(1)) +
+    geom_text(aes(x = lab_xpos, label = proportion), color = "white", size = 3) +
+    theme_minimal() +
+    xlim(0, 1300) +
+    labs (title = "Répartition des habitats des transects parcourus 3 fois", y = "Habitat", x="Nombre de transects")
+repart_hab_transects_an
+```
+
+
+```{r}
+# ggsave('repart_hab_transects_an.png', repart_hab_transects_an)
+```
+

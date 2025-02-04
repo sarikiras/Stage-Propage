@@ -1,0 +1,632 @@
+---
+title: "Indicateurs taxo EDA"
+author: "Sariaka Ramialison"
+date: "2024-02-29"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+library(readxl)
+library(vegan)
+library(tidyverse)
+library(viridis)
+library(forcats)
+library(hrbrthemes)
+library(gridExtra)
+library(ggwordcloud)
+library(treemapify)
+```
+
+## 1. Création de la DataFrame observations (par transect id)
+
+#### 1.1. Récupération des colonnes qui nous intéressent
+
+```{r, cache=TRUE, warning=FALSE}
+knitr::read_chunk("data_clean.Rmd")
+```
+
++ Selection des colonnes
+
+```{r}
+data_releves <- data |>
+  select(1, 75:78) 
+data_releves
+```
+
+#### 1.2 Premier test de `pivot_wider`
+
+```{r}
+data_releves_large <- data_releves |>
+  select(id_releve, taxon, taxon_abondance) |>
+  pivot_wider(names_from = taxon, values_from = taxon_abondance)
+```
+
++ Il existe des problèmes!! 
+
+#### 1.3 Retrait des `NA` sur les taxons (pour retirer la colonne `NA` dans le pivot_wider)
+
+Ah bah en fait il n'y en a qu'un seul! En plus il n'y a pas de relevé pour ce taxon inconnu. On peut l'enlever de nos données.
+
+**On enleve ce releve **
+```{r}
+data_releves <- data_releves |>
+  filter(!is.na(taxon))
+# Il ne nous reste plus que 161310 observations
+```
+
++ Deuxième essai de `pivot_wider`
+
+```{r}
+data_releves_large <- data_releves |>
+  select(id_releve, taxon, taxon_abondance) |>
+  pivot_wider(names_from = taxon, values_from = taxon_abondance)
+```
+
+
+#### 1.4 Correction des valeurs multiples des `taxon_abondance` pour une même espèce/un même groupe dans la même session
+
+Ma proposition : faire la somme des abondances observées pour chaque taxon
+
+```{r}
+data_releves_large <- data_releves |>
+  select(id_releve, taxon, taxon_abondance) |>
+  pivot_wider(names_from = taxon, values_from = taxon_abondance, values_fn = sum)
+data_releves_large
+```
+Correction de la valeur Lycene Bleu du releve 14916
+```{r}
+data_releves_large$`Lycènes bleus`[data_releves_large$id_releve==14916] = 1
+```
+
+
+#### 1.5 Remplacement des `NA` par 0
+
+Les `NA` que l'on remplace ici correspondent aux anciens relevés pour lesquels la ligne du taxon non observé n'existait pas (d'où la création d'un `NA` dans le `pivot_wider`)
+
+```{r}
+data_releves_large <- data_releves_large %>%
+  replace(is.na(.), 0)
+data_releves_large
+```
+
+```{r}
+write.csv(data_releves_large,
+          "tables/data_releves_large.csv",
+          row.names = FALSE)
+```
+
+## 2. Création de la matrice environnement 
+
+Pour plus de détails : voir autre document `indic_taxo_env.Rmd`
+
+```{r}
+#knitr::read_chunk("/Users/sariakasalomon-ramialison/Desktop/Propage/Stage-Propage/indic_taxo_env.Rmd")
+```
+
+La table `data_env_1` contient les informations d'habitat et de météo
+
+```{r}
+data_env_1 <- data |>
+  select(id_releve, transect_habitat, releve_date, heure_debut, heure_fin, temperature, vent, couverture_nuageuse) |>
+  unique()
+data_env_1
+```
+```{r}
+unique(data_env_1$transect_habitat)
+```
+
+## 3. Calcul des indicateurs classiques avec la librairie `vegan`
+
+
+#### 3.1 Création de la matrice des observations `data_species`
+
++ Création de ma matrice d'observations
+
+```{r}
+# Transformation de la colonne id_releve en index
+data_species <- column_to_rownames(data_releves_large, var = "id_releve")
+data_species
+```
+
++ Création d'une matrice auxiliaire sans les sessions sans observation
+
+```{r}
+data_species_filtered <- data_species %>%
+  filter(rowSums(.) != 0)
+```
+J'ai quand même 1988 relevés dans aucune observation : ce qui fait 13,5 %. Etudier la répartition de ces relevés.
+
+#### 3.2 Étude de l'abondance
+
+##### 3.2.1 Répartition des taxons
+
+```{r}
+# nombre d'espèces observées 
+NTaxon <- specnumber(data_species, MARGIN = 2)
+
+df_pap <- as.data.frame(NTaxon)
+df_pap <- rownames_to_column(df_pap, var = "taxon")
+
+
+# Trier les données par ordre décroissant d'effectifs
+df_pap <- df_pap[order(-df_pap$NTaxon), ]
+```
+
+```{r}
+sum(df_pap$NTaxon)
+```
+
+
+```{r}
+ggplot(df_pap, aes(x = NTaxon , y = reorder(taxon, NTaxon))) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(x = "Effectif total", y = "Taxon") +
+  theme_minimal()
+```
+Répartition par habitat
+```{r}
+df_relation_taxon <- data_releves_large |>
+  inner_join(select(data_env_1, id_releve, transect_habitat), by ="id_releve") |>
+  #facet_wrap(~ transect_habitat, scales = "free") +
+  select(-id_releve) |>
+  group_by(transect_habitat) |>
+  summarise_all(sum)
+  
+df_relation_taxon
+```
+```{r}
+habitats <- df_relation_taxon$transect_habitat
+habitats
+```
+
+
+```{r}
+t_df <- as.data.frame(t(df_relation_taxon)) |>
+  rename_all(~ habitats) |>
+  slice(-1)
+t_df
+```
+
+
+
+##### 3.2.2 Répartition des abondances 
+
+```{r}
+# Calcul de l'abondance par session 
+NPap <- rowSums(data_species)
+
+# création de la data frame 
+dNPap <- as.data.frame(NPap) |>
+  rownames_to_column("id_releve")
+
+df_relation <- inner_join(dNPap, data_env_1, by="id_releve")
+df_relation
+```
++ Combien de relevés d'abondance nulle?
+
+
+```{r}
+sum(df_relation$NPap == 0)
+```
+1985 sessions (sur 14689) sans taxon observé (13,5 %). Ce qui est enorme!
+
+
++ On enlève les valeurs chelou (update 1er mars : on corrige )
+
+```{r}
+df_relation |> 
+  filter(NPap > 250)
+```
+
+```{r}
+data_releves_large |> 
+  filter(id_releve == 14916)
+```
+On corrige avec la moyenne des Lycènes bleus observés dans l'habitat : Friche 
+
+```{r}
+df_relation_taxon |>
+  select(`Lycènes bleus`, transect_habitat) |>
+  filter(transect_habitat == "Friche")
+```
+Il y eu 3220 Lycènes Bleus sur 1216 observations de friche : 2,64 observations.
+
+On peut corriger mais on enlève
+
+```{r}
+df_relation <- df_relation |> 
+  filter(NPap < 250)
+```
+
+
+```{r}
+hist(df_relation$NPap, breaks = sqrt(length(NPap)), main= "Distribution de l'abondance observée par session", freq=FALSE, xlab="Abondances observées")
+lines(density(df_relation$NPap), col='red')
+```
+```{r}
+# Test de normalité de Kolmogorov-Smirnof
+ks.test(df_relation$NPap, "pnorm")
+```
+```{r}
+#qqplot
+
+ggplot(df_relation, aes(sample=NPap)) +
+  stat_qq() +
+  stat_qq_line()
+```
+
+
+##### 3.2.2 Plot des abondances par milieux
+
+
+
+```{r}
+ga <- ggplot(df_relation, aes(x=transect_habitat, y=NPap, fill=transect_habitat)) + 
+  geom_boxplot() +
+  geom_hline(yintercept = mean(df_relation$NPap), color='red') +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Habitat", y = "Abondance", title = "Abondances en fonction des habitats") 
+ga
+```
+Etude de cette valeur du square urbain 
+
+```{r}
+df_relation |> 
+  filter(NPap > 150)
+```
+
+```{r}
+data |> filter(id_releve == 24619)
+```
+Il a tout bien respecté... peut être que c'est bon. On laisse
+
++ Ajout de la courbe des moyennes par habitat
+
+```{r}
+mean_by_habitat <- df_relation |>
+  group_by(transect_habitat) |>
+  summarize(mean_NPap = mean(NPap))
+
+mean_by_habitat
+```
+
+
+
++ QQplots
+
+```{r}
+ggplot(df_relation, aes(sample=NPap, colour = factor(transect_habitat))) +
+  stat_qq(size=0.2) +
+  stat_qq_line()
+```
+
+```{r}
+ggplot(df_relation, aes(sample=NPap)) +
+  stat_qq(size=0.2) +
+  stat_qq_line() +
+  facet_wrap(~ transect_habitat, scales = "free") + 
+  ggtitle("QQ plots Abondance par Habitat")+
+  theme_minimal()
+```
+
+
+#### 3.3 Étude de la richesse spécifique 
+
+```{r}
+# richesse par session
+SPap <- specnumber(data_species)
+SPap
+
+# création de la data frame 
+dSPap <- as.data.frame(SPap) |>
+  rownames_to_column("id_releve")
+
+df_relation <- df_relation |> left_join(dSPap, by="id_releve")
+df_relation
+```
+
+##### 3.3.1 Distribution de la richesse spécifique 
+
+```{r}
+hist(df_relation$SPap, breaks = sqrt(length(SPap)), main= "Répartition des indices de richesse spécifique", freq=TRUE, xlab="Richesse spécifique")
+```
+Ca a l'air "normal"
+
+
++ Etude de la richesse specifique par Habitat
+
+```{r}
+gr <- ggplot(df_relation, aes(x=transect_habitat, y=SPap, fill=transect_habitat)) + 
+  geom_boxplot() +
+  geom_hline(yintercept = mean(df_relation$SPap), color='red') +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Habitat", y = "Richesse spécifique", title = "Richesse spécifique en fonction des habitats") 
+gr
+```
+
+
+#### 3.4 Etude de la diversité de Shannon (faut-il le faire par habitat car on ne peut pas comparer ce qui n'est pas comparable)
+
+##### 3.4.1 Calcul de H'
+
+L'indice de Shannon permet d'exprimer la diversité spécifique d'un peuplement (caractérise le nombre plus ou moins grand d'espèces présentes dans le peuplement), il est lié à la taille de l'échantillon et donc il prend également l'abondance. Si le peuplement est homogène (constitué d'une même espèce, alors l'indice est H'= 0).
+
+```{r}
+# Calcul des indices de Shannon
+Hpap <- diversity(data_species)
+length(Hpap)
+
+```
+
+```{r}
+hist(unlist(Hpap), breaks = sqrt(length(Hpap)), main= "Répartition des indices de Shannon de la diversité", freq=TRUE, xlab="Shannon index")
+```
+Prédominance de 0.
+Indices plutôt faibles.
+
+Le max doit être log(39).
+
+Waw bahh ce n'est pas le même nombre d'espèce qui apparait chaque fois hein
+
++ Faut il enlever la dernière colonne?
+
+Lu dans la doc : None of these diversity indices is usable for empty sampling units without any species, but some of the indices can give a numeric value. Filtering out these cases is left for the user.
+
+
+```{r}
+# Calcul des indices de Shannon pour les données avec observation
+H1pap <- diversity(data_species_filtered)
+length(H1pap)
+```
+
+```{r}
+hist(unlist(H1pap), breaks = sqrt(length(Hpap)), main= "Répartition des indices de Shannon de la diversité", freq=TRUE, xlab="Shannon index")
+```
+Pourquoi tant d'indices nuls?
+
+```{r}
+data_species_filtered_H <- data_species_filtered |>
+  mutate(H = diversity(data_species_filtered))
+data_species_filtered_H_S <- data_species_filtered_H |>
+  mutate(S = specnumber(data_species_filtered)) |>
+  filter(H==0)
+sum(data_species_filtered_H_S$S ==1)
+```
+
+C'est bien cela, il a a 3093 sessions sur les 12713 sessions avec au moins une observation, pour lequel on n'observe qu'un taxon (24,3 % des observations)
+
+La distribution est-elle normale?
+
+##### 3.4.2 H' par habitat
+
++ Etude de l'indice de Shannon par Habitat
+
+Ajout de la colonne Shannon (H1pap). Ben du coup, on enlève tous les relevés pour lesquels il n'y a pas eu d'observation. 
+Il reste 12713 sessions.
+
+```{r}
+# création de la data frame 
+dH1pap <- as.data.frame(H1pap) |>
+  rownames_to_column("id_releve")
+
+df_relation <- df_relation |> 
+  inner_join(dH1pap, by="id_releve")
+df_relation
+```
+
+
+
+```{r}
+gh <- ggplot(df_relation, aes(x=transect_habitat, y=H1pap, fill=transect_habitat)) + 
+  geom_boxplot() +
+  geom_hline(yintercept = mean(df_relation$H1pap), color='red') +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Habitat", y = "Indice de Shannon", title = "Indices de Shannon par Habitat") 
+gh
+```
+##### 3.4.3 H' Etude des 3093 sessions d'indice de Shannon nul (une seule espèce observée)
+
+
+
+```{r}
+df_Hnul <- df_relation |>
+  filter(H1pap == 0)
+df_Hnul
+```
+
+
+
+```{r}
+df_relation |>
+  dplyr::mutate(Hnul = if_else(H1pap == 0, "Indice nul", "Indice non nul")) |>
+  dplyr::group_by(transect_habitat, Hnul) |>
+  dplyr::summarise(n=n()) |>
+  ggplot(aes(x=reorder(transect_habitat,-n), y=n, fill=Hnul))+
+    geom_bar(stat="identity") +
+    labs(x = "Habitat", 
+         y = "Effectif", 
+         title = "Habitat d'observation d'indices de Shannon nul", 
+         fill="Indice de Shannon") +
+    scale_fill_viridis_d() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+
+```
+
+```{r}
+df_relation |>
+  dplyr::mutate(Hnul = if_else(H1pap == 0, "Indice nul", "Indice non nul")) |>
+  dplyr::group_by(transect_habitat, Hnul) |>
+  dplyr::summarise(n=n())
+```
+
+
+#### 3.5 Indice de Pielou (équitabilité)
+
+Il n'est calculable que pour les sessions pour lesquelles la richesse specifique S est strictement supérieure à 1
+
+```{r}
+# Cacul de l'indice de Pielou JPap
+gp<- df_relation |>
+  filter (SPap >1) |>
+  mutate(JPap = H1pap/log(SPap)) |>
+  ggplot(aes(x=transect_habitat, y=JPap, fill=transect_habitat)) + 
+  geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Habitat", y = "Pielou eveness", title = "Indices d'équitabilité de Pielou par Habitat", fill="Habitat") 
+gp
+```
+Mise en regard Pielou et Shannon
+
+
+```{r}
+grid.arrange(gh, gp, ncol=2)
+```
+
+## 4. Etude des taxons
+
+#### 4.1 Répartition des taxons dans les habitats
+
+On se base sur df_relation_taxon
+
+
+```{r}
+df_long <- df_relation_taxon |>
+  pivot_longer(Amaryllis:`Papillon indéterminé`) 
+df_long
+```
+
+
+#### 4.2 Top 5 taxons par habitat
+
+```{r}
+ggplot(df_long, aes(x = value, y = reorder(name, value))) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  facet_wrap(~ transect_habitat, scales = "free") + 
+  #labs(x = "Effectif total", y = "Taxon") +
+  theme_minimal()
+```
++ Treemap
+
+```{r}
+df_long |>
+  #filter(transect_habitat=="Prairie") |>
+  ggplot(aes(area=value, fill=name, label =name)) +
+    geom_treemap() +
+    geom_treemap_text()+
+    scale_fill_viridis_d("Taxon") +
+    facet_wrap(~ transect_habitat, scales = "free") +
+    theme_minimal()
+```
+
++ Wordcloud mais besoin de faire un petit calcul pour avoir les proportions /habitats
+
+```{r}
+repart_hab <- df_long |>
+  dplyr::group_by(transect_habitat) |>
+  dplyr::summarise(n=sum(value)) 
+repart_hab
+```
+
+```{r, warning=FALSE}
+df_long |>
+  left_join(repart_hab, by = "transect_habitat") |>
+  mutate(prop_value = value/n*100) |>
+  ggplot(aes(label=name, size=prop_value, color=name)) +
+    geom_text_wordcloud() +
+    facet_wrap(~ transect_habitat, scales = "free") +
+    theme_minimal()
+```
+
+```{r, warning=FALSE}
+df_long |>
+  #filter(transect_habitat=="Prairie") |>
+  ggplot(aes(label=name, size=value, color=name)) +
+    geom_text_wordcloud() +
+    facet_wrap(~ transect_habitat, scales = "free") +
+    #scale_size_area(max_size=10) +
+    theme_minimal()
+```
+
+#### 4.3 Dans quels habitats peut on observer les taxons?
+
+```{r}
+ggplot(df_long, aes(fill=transect_habitat, x=value, y=name)) + 
+  geom_bar(position="fill", stat="identity") +
+  labs(x="Taxon", y="Répartition", title="Habitat d'observation de chaque taxon") +
+  scale_fill_viridis(discrete = T, option="plasma") +
+  #theme_ipsum() +
+  theme_minimal()
+```
+Il faut peut être normaliser -relativiser- avec le nombre de sessions par habitat.
+Pour cela on utilise la table `repart_habitat` de `EDA.Rmd`
+
+```{r}
+knitr::read_chunk("~/Desktop/Propage/EDA.Rmd")
+```
+
+On joint la table et on normalise
+
+```{r}
+# Récupération des noms de taxons
+sel_col <- c(colnames(df_relation_taxon))[-1]
+sel_col
+```
+```{r}
+df_relation_taxon |> 
+  left_join(repart_hab, by= "transect_habitat")
+```
+
+
+```{r}
+df_relation_taxon_relatif <- df_relation_taxon |> 
+  left_join(repart_hab, by= "transect_habitat") 
+
+df_relation_taxon_relatif
+```
+
+
+On refait les graphes
+```{r}
+df_long_rel <- df_relation_taxon_relatif |>
+  pivot_longer(Amaryllis:`Papillon indéterminé`) 
+df_long_rel
+```
+
+
+```{r}
+ggplot(df_long_rel, aes(fill=transect_habitat, x=value/n, y=name)) + 
+  geom_bar(position="fill", stat="identity") +
+  labs(x="Taxon", y="Répartition", title="Habitat d'observation privilégié de chaque taxon") +
+  scale_fill_viridis("Habitat", discrete = T, option = "plasma") +
+  #theme_ipsum() +
+  theme_minimal()
+```
+#### 4.2 Analyse de correspondance 
+
+
+```{r}
+df_habitat <- df_relation_taxon |> 
+  column_to_rownames("transect_habitat") 
+df_habitat
+
+ac_habitat <- cca(df_habitat)
+```
+
+```{r}
+summary(ac_habitat, display = 'reg')
+```
+```{r}
+plot(ac_habitat)
+```
++ Je fais la meme chose avec la sélection d'espèces
+
+```{r}
+df_habitat_sp <- df_habitat |>
+  select(all_of(especes))
+
+ac_habitat_sp <- cca(df_habitat_sp)
+summary(ac_habitat_sp)
+plot(ac_habitat_sp)
+```
+

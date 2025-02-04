@@ -1,0 +1,579 @@
+---
+title: "Une table de base"
+author: "Sariaka Ramialison"
+date: "2024-02-29"
+output: html_document
+---
+
+On crée ici une table à plat `data` avec des modifications valables pour tout le reste des études 
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(readxl)
+```
+
+
+# 1. Table de base 
+
++ Lecture des données 
+
+```{r, cache=TRUE, warning=FALSE}
+# chemin de la table à plat
+path <- "all_data_propage20240201.xlsx"
+
+data <- read_excel(path)
+# 164323 observations initiales
+```
+
+
++ Formatage des `id` pour une meilleure lecture
+
+```{r, cache=TRUE, warning=FALSE}
+# Formatage des données 
+data$id_releve <- gsub(intToUtf8(8239),"", data$id_releve)
+data$site_id <- gsub(intToUtf8(8239),"", data$site_id)
+data$user_id <- gsub(intToUtf8(8239),"", data$user_id)
+```
+
+
++ Retrait des doublons 
+
+```{r, cache=TRUE, warning=FALSE}
+data <- distinct(data)
+# 164311 observations après retrait des doublons
+```
+
+
++ Simplification de valeurs des habitats
+
+```{r}
+data <- data |>
+  mutate(transect_habitat = case_when(
+    transect_habitat == "Square urbain (mixte surface pelouse / surfaces non végétalisée)" ~ "Square urbain",
+    transect_habitat == "Lisière de bois ou de forêt" ~ "Lisière de bois",
+    transect_habitat == "Jardin horticole / Jardin potager" ~ "Jardin",
+    transect_habitat == "Bords d’infrastructures de transport (routes, voies ferrées...)" ~ "Bords d’infrastructures",
+    transect_habitat == "Friche" ~ "Friche",
+    transect_habitat == "Cimetière" ~ "Cimetière",
+    transect_habitat == "Prairie" ~ "Prairie",
+    transect_habitat == "Gazon" ~ "Gazon"
+  ))
+```
+
++ Rajout d'une colonne `id_transect`
+
+```{r}
+data <- data |>
+  mutate(id_transect= paste0(site_id,"_", transect_nom))
+data
+```
+
+
++ Rajout d'une colonne `jour_julien`
+
+```{r}
+data <- data |>
+  mutate(jour_julien = julian(releve_date)) |>
+  relocate(jour_julien, .after = releve_date)
+data
+```
+
+
+# 2. Création des fonctions qui filtrent les bonnes dates
+
++ Fonction qui donne les bonnes dates en format 3-uple (year, month, day) en jours juliens 
+
+```{r}
+# Fonction pour convertir une date en jour julien
+date_to_julian_day <- function(year, month, day) {
+  # Créer un objet de type Date avec lubridate
+  date_obj <- ymd(paste(year, month, day, sep = "-"))
+  # Utiliser la fonction julian() pour obtenir le jour julien
+  julian_day <- julian(date_obj)
+  return(julian_day)
+}
+```
+
++ Création d'un vecteur `jours_releves_exacts` contenant les jours-juliens de relevés théoriques pour toutes les années
+
+```{r}
+years <- c(2009:2024)
+
+# On va stocker dans jours_relevés les jours corrects des relevés
+jours_releves_exacts <- c()
+for (y in years){
+  jours_releves_exacts <- c(jours_releves_exacts,
+                     date_to_julian_day(y, 06, 01),
+                     date_to_julian_day(y, 07, 05),
+                     date_to_julian_day(y, 08, 10))
+}
+jours_releves_exacts
+```
+
+
+```{r}
+# on va créer une table avec les tables des relevés possibles
+
+# On va d'abord créer une fonction qui prend en argument le nombre de jours tolérés avant et après le relevé théorique,
+# Qui renvoie les jours acceptables de relevés
+
+t <- 15
+
+jours_acceptables <- function(t){
+  jours_releves_possibles <- c()
+  for (j in jours_releves_exacts){
+    jours_releves_possibles <- c(jours_releves_possibles, (j-t):(j+t))
+  }
+  return(jours_releves_possibles)
+}
+
+jours_releves_possibles <- jours_acceptables(t)
+```
+
+#### Encore plus finement
+
+Faire des filtres par période
+```{r}
+
+years <- c(2009:2024)
+
+# Dates des relevés de juin
+jours_releves_exacts_juin <- c()
+for (y in years){
+    jours_releves_exacts_juin <- c(jours_releves_exacts_juin,
+                     date_to_julian_day(y, 06, 01))
+    }
+
+# Dates des relevés de juillet
+jours_releves_exacts_juillet <- c()
+for (y in years){
+    jours_releves_exacts_juillet <- c(jours_releves_exacts_juillet,
+                     date_to_julian_day(y, 07, 05))
+    }
+
+# Dates des relevés d'aout
+jours_releves_exacts_aout <- c()
+for (y in years){
+    jours_releves_exacts_aout <- c(jours_releves_exacts_aout,
+                     date_to_julian_day(y, 08, 10))
+    }
+
+jours_acceptables_1 <- function(t){
+  jours_releves_possibles <- c()
+  for (j in jours_releves_exacts_juin){
+    jours_releves_possibles <- c(jours_releves_possibles, (j-t):(j+t))
+  }
+  return(jours_releves_possibles)
+}
+
+
+jours_acceptables_2 <- function(t){
+  jours_releves_possibles <- c()
+  for (j in jours_releves_exacts_juillet){
+    jours_releves_possibles <- c(jours_releves_possibles, (j-t):(j+t))
+  }
+  return(jours_releves_possibles)
+}
+
+jours_acceptables_3 <- function(t){
+  jours_releves_possibles <- c()
+  for (j in jours_releves_exacts_aout){
+    jours_releves_possibles <- c(jours_releves_possibles, (j-t):(j+t))
+  }
+  return(jours_releves_possibles)
+}
+
+```
+
+Calcul des valeurs pour `t=15``
+
+```{r}
+jours_15_per1 <- jours_acceptables_1(15)
+jours_15_per2 <- jours_acceptables_2(15)
+jours_15_per3 <- jours_acceptables_3(15)
+```
+
+
+
+```{r}
+# Pour le fun, la fonction si je lui donne un data_frame, donne un nouveau data_frame filtré avec les 3 relevés  
+# avec des dates acceptables
+# Arguments : 
+# - data.frame contenant une colonne jour_julien, id_transect_annee + id_releve
+# - t = la tolérance (en jours)
+
+# Elle utilise les fonctions qui retroune la liste des jours acceptables sur chaque période à exclure cf.infra
+# Elle utilise une fonction qui retroune la liste des relevés à exclure cf.infra
+
+
+##############################################################
+#                                                            #
+# Fonction retourne la liste des relevés à exclure           #
+#                                                            #
+##############################################################
+
+
+# Fonction qui permet de donner la liste des relevés à exclure
+# Avec comme conditions:
+# - si dates différentes, exclure les relevés aux dates les plus eloignées 
+# - si dates identiques, ne garder que le dernier relevé i.e. le relevé à l'id_relevé le plus élevé
+
+# Cette fonction prend comme arguments :
+# - le data_frame des transects selectionnées pour chaque période : df_periode
+# - la i-ème période (i = 1, 2, 3)
+
+jours_releves_exacts <- c(jours_releves_exacts_juin, jours_releves_exacts_juillet, jours_releves_exacts_aout)
+
+liste_releve_a_exclure_periode <- function(df_periode, i){
+  
+  # liste des transects apparaissant plusieurs fois sur la période
+  liste_dupliq <- df_periode$id_transect_annee[duplicated(df_periode$id_transect_annee)] 
+  
+  # Initialisaion de la liste des relevés à exclure
+  liste_releves_exclure <- c()
+  
+  # Boucle sur les transects dupliqués
+  for (trans in liste_dupliq){
+  
+    # on filtre pour récupérer les transects identiques
+    filtre_df <- df_periode |>
+      filter(id_transect_annee == trans) |>
+      arrange(desc(id_releve)) # le truc qui permet de récupérer la dernière saisie si dates identiques
+    
+    # on récupère l'indice du relevé qui est le plus proche de la date preconisée (relevé à garder)
+    ind <- which.min(lapply(filtre_df$jour_julien, function(j){min(abs(jours_releves_exacts[i] - j))}))
+    
+    # on met à jour la liste des relevés à exclure
+    liste_releves_exclure <- c(liste_releves_exclure, filtre_df$id_releve[-ind])
+  
+}
+  
+  return(liste_releves_exclure)
+}
+
+
+
+#######################################################################
+#                                                                     #
+# Fonction qui retourne le nouveau data.frame filtré aux bonnes dates #
+#                                                                     #
+#######################################################################
+
+
+
+filtre_df_3_releves <- function(df, t){
+  
+  # liste des jours tolérés
+  jours_per1 <- jours_acceptables_1(t)
+  jours_per2 <- jours_acceptables_2(t)
+  jours_per3 <- jours_acceptables_3(t)
+  
+  # split de df en 3 périodes. Objectif : récupérer un transect unique par période
+  df_P1 <- df|>
+    filter(jour_julien %in% jours_per1) 
+  l1 <- liste_releve_a_exclure_periode(df_P1, 1)
+  df_P1 <- df_P1 |>
+    filter(!id_releve %in% l1)
+  
+  df_P2 <- df|>
+    filter(jour_julien %in% jours_per2)
+  l2 <- liste_releve_a_exclure_periode(df_P2, 2)
+  df_P2 <- df_P2 |>
+    filter(!id_releve %in% l2)
+  
+  df_P3 <- df|>
+    filter(jour_julien %in% jours_per3) 
+  l3 <- liste_releve_a_exclure_periode(df_P3, 3)
+  df_P3 <- df_P3 |>
+    filter(!id_releve %in% l3)
+  
+  liste_transects_selec <- intersect(df_P1$id_transect_annee,
+                                     df_P2$id_transect_annee)
+  liste_transects_selec <- intersect(liste_transects_selec,
+                                    df_P3$id_transect_annee)
+  
+
+  n_df <- bind_rows(df_P1, df_P2, df_P3) |>
+                filter(id_transect_annee %in% liste_transects_selec)
+  return(n_df)
+}
+```
+
+
+### Une fonction qui filtre les bonnes dates, sans avoir spéficiquement les 3 
+
+```{r}
+filtre_bon_releves <- function(df, t){
+  
+  # liste des jours tolérés
+  jours_per1 <- jours_acceptables_1(t)
+  jours_per2 <- jours_acceptables_2(t)
+  jours_per3 <- jours_acceptables_3(t)
+  
+  # split de df en 3 périodes. Objectif : récupérer un transect unique par période
+  df_P1 <- df|>
+    filter(jour_julien %in% jours_per1) 
+  l1 <- liste_releve_a_exclure_periode(df_P1, 1)
+  df_P1 <- df_P1 |>
+    filter(!id_releve %in% l1)
+  
+  df_P2 <- df|>
+    filter(jour_julien %in% jours_per2)
+  l2 <- liste_releve_a_exclure_periode(df_P2, 2)
+  df_P2 <- df_P2 |>
+    filter(!id_releve %in% l2)
+  
+  df_P3 <- df|>
+    filter(jour_julien %in% jours_per3) 
+  l3 <- liste_releve_a_exclure_periode(df_P3, 3)
+  df_P3 <- df_P3 |>
+    filter(!id_releve %in% l3)
+  
+  liste_transects_selec <- intersect(df_P1$id_transect_annee,
+                                     df_P2$id_transect_annee)
+  liste_transects_selec <- intersect(liste_transects_selec,
+                                    df_P3$id_transect_annee)
+  
+
+  n_df <- bind_rows(df_P1, df_P2, df_P3) 
+  return(n_df)
+}
+```
+
+# 3. Fonctions de géographie
+
+
++ Une fonction qui tranforme une linestring de la colonne `transect_coordonnees`en liste de coordonnées
+
+```{r}
+coords <- function(my_string){
+  latlong <- unlist(str_extract_all(my_string, "-?\\d+(\\.\\d+)?")) #récupère juste les coordonnées
+  lat <- as.numeric(latlong[which(seq_along(latlong) %% 2 == 0)])
+  long <- as.numeric(latlong[which(seq_along(latlong) %% 2 == 1)])
+  return(list(long, lat))
+}
+```
+
+
++ Des fonctions qui à partir de la liste de coordonnées précédentes donnent un "point moyen"
+
+```{r}
+long_moy <- function(my_string){
+  mean(coords(my_string)[[1]])
+}
+
+lat_moy <- function(my_string){
+  mean(coords(my_string)[[2]])
+}
+```
+
+
++ Une fonction qui transforme une linestring de la colonne `site_coordonnees` en st_polygone lisible par leaflet
+
+```{r}
+polygone <- function(my_string){
+  latlong <- unlist(str_extract_all(my_string, "-?\\d+(\\.\\d+)?")) #récupère juste les coordonnées
+  lat <- as.numeric(latlong[which(seq_along(latlong) %% 2 == 0)])
+  long <- as.numeric(latlong[which(seq_along(latlong) %% 2 == 1)])
+  st_polygon(x = list((cbind(lat, long))))
+}
+```
+
++ Une fonction qui transforme une linestring de la colonne `transect_coordonnees` en line lisible par leaflet
+
+```{r}
+polyline <- function(my_linestring){
+  latlong <- unlist(str_extract_all(my_linestring, "-?\\d+(\\.\\d+)?")) #récupère juste les coordonnées
+  lat <- as.numeric(latlong[which(seq_along(latlong) %% 2 == 0)])
+  long <- as.numeric(latlong[which(seq_along(latlong) %% 2 == 1)])
+  cbind(long, lat)
+}
+```
+
+# 4. Listes utiles
+
+##### Anciens et nouveaux relevés 
+
+```{r}
+df_nb_releves <- data |>
+  group_by(id_releve) |>
+  summarise(n = n())
+
+
+liste_anciens_releves <- df_nb_releves$id_releve[df_nb_releves$n != 39]
+liste_nouveaux_releves <- df_nb_releves$id_releve[df_nb_releves$n == 39]
+```
+
+# 5. Variables à choix multiple 
+
++ Fonctions de parsing pour les variables à choix multiple 
+
+```{r}
+# la fonction qui parse la chaine de caractère avec toutes les propositions 
+liste_prop <- function(my_string){
+  l <- str_match_all(my_string, '"([^"]+)"')
+  l[[1]][,2]}
+```
+
++ on va créer pour chaque variable à choix multiple, une table longue avec ces choix
+
+On extrait du data.frame initial les 2 colonnes `id_transect_annee` + la variable à choix multiple.
+
+```{r}
+# Fonction qui transforme une ligne du data.frame exptrait en petite table avec les propositions parsées par `liste_prop`
+# Elle prend en argument une ligne de DataFrame qui a 2 colonnes
+# Colonne 1 = id_transect_annee
+# Colonne 2 = Variable constituée des choix à parser
+
+transfo_ligne_table <- function(ligne){
+  id_tran <- ligne[[1]]
+  vec <- liste_prop(ligne[[2]])
+  return(cbind(rep(id_tran, length(vec)), vec))
+}
+```
+
++ on concatène les resultats obtenus pour chaque ligne : on obtient un data.frame long
+
+```{r}
+# Fonction qui crée la matrice longue : concaténation des petites tables créées par `transfo_ligne_table`
+# Elle prend en arguments:
+# - le DataFrame qui a au moins 2 colonnes : `id_transect_annee` et une colonne de variables à parser
+# - le nom de la colonne à parser 
+
+transfo_prop_long <- function(df, nomcol){
+  liste_tb <- apply(df[, c("id_transect_annee", nomcol)], 1, transfo_ligne_table)
+  if (is.list(liste_tb)){
+    n_df <- as.data.frame(do.call(rbind, liste_tb)) |>
+    rename("id_transect_annee" = "V1", nomcol = "vec")
+  } else {
+    n_df <- as.data.frame(t(as.matrix(apply(df_env_transects_prai_4ans_modif[, c("id_transect_annee", nomcol)], 
+                                            1, 
+                                            transfo_ligne_table))),
+                          colnames = c("id_transect_annee", nomcol)
+    )
+  }
+  return(n_df)
+}
+```
+
++ On peut maintenant transformet en data.frame wide BINAIRE
+
+```{r}
+
+# Fonction qui crée la matrice large 
+# Elle prend les mêmes arguments que précédemment
+
+transfo_prop_bin <- function(df, nomcol){
+  df_long <- transfo_prop_long(df, nomcol)
+  return(as.data.frame.matrix(table(df_long)))
+}
+```
+
+
+# 6. Tables utiles pour jointures
+
+#### 6.1 table id_transect_annee avec d'autres variable [Je n'aurai pas besoin de ceci en effet aléatoire]
+
++ Table avec comme id de base : `id_transect_annee`, avec site et user id
+
+Sert essentiellement aux modèles avec effets aléatoires sur les sites et les utilisateurs 
+
+```{r}
+table_user_site <- data |>
+  select(id_transect, site_id, user_id, releve_date) |>
+  mutate(id_transect_annee = paste0(id_transect, "_", year(releve_date))) |>
+  select(-releve_date) |>
+  unique()
+table_user_site
+```
+
+
+# 7. Listes utiles 
+
+
++ Liste à totale
+
+```{r}
+taxons <- c("Amaryllis", 
+            "Argus vert",
+            "Azuré des nerpruns",
+            "Azuré porte-queue",
+            "Belle-Dame",
+            "Brun des pélargoniums",
+            "Carte géographique",
+            "Citrons",
+            "Cuivrés",
+            "Demi-Deuil et Echiquiers",
+            "Fadets",
+            "Flambés",
+            "Fluorés et Colias jaunes",      
+            "Gazé",
+            "Grand Nacré et Tabac d'Espagne",
+            "Grande Tortue",
+            "Hespéries orangées",
+            "Hespéries tachetées",
+            "Lycènes bleus",
+            "Machaons",
+            "Marbrés",
+            "Mars changeants",
+            "Mégères et Némusiens",
+            "Mélitées et Damiers",
+            "Moirés",
+            "Myrtil",
+            "Paon du jour",
+            "Petites Tortues",
+            "Petits Nacrés",
+            "Piérides blanches",
+            "Procris",
+            "Robert le diable",
+            "Silène",
+            "Souci",
+            "Sylvains",
+            "Tircis",
+            "Tristan",
+            "Vulcain",
+            "Papillon indéterminé")
+```
+
++ Morpho-groupes à exclure
+
+```{r}
+morpho_groupes <- c("Cuivrés",
+                    "Fadets",
+                    "Fluorés et Colias jaunes",
+                    "Hespéries orangées",
+                    "Hespéries tachetées",
+                    "Lycènes bleus",
+                    "Marbrés",
+                    "Mégères et Némusiens",
+                    "Mélitées et Damiers",
+                    "Moirés",
+                    "Petits Nacrés",
+                    "Piérides blanches",                                      
+                    "Sylvains", 
+                    "Papillon indéterminé")   
+```
+
++ Liste espèces selectionnées
+
+```{r}
+especes <- taxons[!all_of(taxons) %in% morpho_groupes]
+especes
+```
+```{r}
+length(unique(data$user_id))
+```
+
+```{r}
+length(unique(data$id_transect))
+```
+```{r}
+length(unique(data$id_releve))
+```
+
+```{r}
+nrow(data |>
+  select(taxon_abondance) |>
+  filter(taxon_abondance != 0))
+```
+
