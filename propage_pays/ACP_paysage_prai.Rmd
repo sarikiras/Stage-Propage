@@ -1,0 +1,772 @@
+---
+title: "ACP_paysages Prairies"
+author: "Sariaka Ramialison"
+date: "2024-06-05"
+output: html_document
+---
+
+```{r}
+library(vegan)
+library(tidyverse)
+library(readxl)
+```
+
+
++ Table environnement Prairies
+
+```{r}
+df_env_prai <- read_csv("tables/df_env_prai.csv", 
+                        show_col_types = F)
+# id_transect_prai <- ((df_env_prai |>
+#  mutate(id_transect = str_sub(id_transect_annee, 1, -6)))$id_transect) |>
+#  unique()
+```
+
+```{r}
+id_transect_prai <- unique(df_env_prai_tot$id_transect)
+length(id_transect_prai)
+```
+
+
+```{r}
+id_transect_prai[15]
+id_transect_prai[155]
+```
+
+```{r}
+id_transect_prai[15] <- "2_Lac du Héron vmclher 179 RNR \\jachères pavés\\"
+id_transect_prai[155] <- "2_Lac du Héron vmclher 193 RNR \\Friche\\"
+```
+
+??? ou se trouve 
+spatial_data?
+
+
+
+```{r}
+read_csv("/Users/sariakasalomon-ramialison/Desktop/Propage/data_habitat_transect_an.csv",
+         show_col_types = FALSE)
+```
+
+```{r}
+read_csv("/Users/sariakasalomon-ramialison/Desktop/Propage/data_habitat_transect.csv",
+         show_col_types = FALSE)
+```
+
+
+Rappel: table de l'habitat 
+```{r}
+# table_transect_hab <- habitat_transect_an |>
+#   select (id_transect, classe_habitat, habitat) |>
+#   unique() |>
+#   filter(!(id_transect == "525_plaine centrale" & classe_habitat == "0_Territoires artificialisés sans végétation"))
+# table_transect_hab
+```
+
+```{r}
+#table_transect_hab$id_transect[which(duplicated(table_transect_hab$id_transect))]
+```
+
+# 1. Importation des buffers
+
+```{r}
+#che1 = "/Users/sariakasalomon-ramialison/Documents/Documents - Sariaka’s MacBook Air/PROPAGE_II/propage_geo/buffer_1000_complete.csv"
+#che1 = "/Users/sariakasalomon-ramialison/Documents/PROPAGE_II/propage_geo/buffer_1000_complete.csv"
+che1 = "/Users/sariakasalomon-ramialison/Desktop/Propage/propage_geo/buffer_1000_complete.csv"
+buffer_1000_prai <- read.csv(che1, sep = ";") |>
+  filter(id_transect %in% id_transect_prai) |>
+  unique()
+buffer_1000_prai
+```
+
+
+
+```{r}
+che2 = "/Users/sariakasalomon-ramialison/Desktop/Propage/propage_geo/buffer_5000_complete.csv" 
+buffer_5000_prai <- read.csv(che2, sep = ";")|>
+  filter(id_transect %in% id_transect_prai)
+buffer_5000_prai
+```
+
+```{r}
+che3 = "/Users/sariakasalomon-ramialison/Desktop/Propage/propage_geo/buffer_10000_complete.csv" 
+buffer_10000_prai <- read.csv(che3, sep = ";")|>
+  filter(id_transect %in% id_transect_prai)
+buffer_10000_prai
+```
+# 2. Transformation en pourcentages d'occupation du sol
+
+```{r}
+occupation_sol_1000_prai <- buffer_1000_prai |>
+  column_to_rownames("id_transect") %>%
+  mutate_all(function(x){x/rowSums(.)*100}) 
+  #pour vérifier
+  #mutate(somme = rowSums(.)) 
+occupation_sol_1000_prai
+```
+
+```{r}
+occupation_sol_5000_prai <- buffer_5000_prai |>
+  column_to_rownames("id_transect") %>%
+  mutate_all(function(x){x/rowSums(.)*100}) 
+  #pour vérifier
+  #mutate(somme = rowSums(.)) 
+occupation_sol_5000_prai
+```
+
+
+```{r}
+occupation_sol_10000_prai <- buffer_10000_prai |>
+  column_to_rownames("id_transect") %>%
+  mutate_all(function(x){x/rowSums(.)*100}) 
+  #pour vérifier
+  #mutate(somme = rowSums(.)) 
+occupation_sol_10000_prai
+```
+
+# 3. Tests ACP
+
+```{r}
+pour_ACP <- occupation_sol_1000_prai
+rownames(pour_ACP) <- NULL
+acp_1000 <- prcomp(pour_ACP)
+summary(acp_1000)
+```
+
+
+```{r}
+screeplot(acp_1000)
+```
+```{r}
+biplot(acp_1000)
+```
+# 4. Changement des classes d'habitats
+
++ Lire l'excel dans lequel on a redéfini les classes d'habitats 
+
+```{r}
+#path <- "/Users/sariakasalomon-ramialison/Desktop/Propage/RE_classement_CLC.xlsx"
+#path <- "/Users/sariakasalomon-ramialison/Desktop/Propage/RE_classement_CLC_2.xlsx"
+path <- "/Users/sariakasalomon-ramialison/Desktop/Propage/RE_classement_CLC_2 (1).xlsx"
+reclassement <- read_xlsx(path)
+reclassement
+```
+```{r}
+table_correspondance_CLC <- reclassement |>
+  select(code_clc_niveau_3, `NOUVEAU CLASSEMENT`, `NOUVEAU LIBELLE`) |>
+  mutate(code_clc_niveau_3 = as.numeric(code_clc_niveau_3)) |>
+  mutate(`NOUVEAU LIBELLE` = case_when(
+    `NOUVEAU LIBELLE` == "Forêts [milieu fermé]" ~ "Forêts",
+    `NOUVEAU LIBELLE` == "Milieux à végétation arbustive et/ou herbacée" ~"Végétation arbustive et/ou herbacée",
+    TRUE ~ `NOUVEAU LIBELLE`
+  ))
+table_correspondance_CLC 
+```
+table_correspondance_CLC
+```{r}
+# write_csv(table_correspondance_CLC, "/Users/sariakasalomon-ramialison/Desktop/Propage/table_correspondance_CLC.csv")
+```
+
+
+### a) Nouvelles tables 1000
+
+
+```{r}
+buffer_1000_prai_long <- buffer_1000_prai |>
+  pivot_longer(2:35) |>
+  mutate(code_clc_niveau_3 = as.numeric(substring(name, 2, 4))) |>
+  left_join(table_correspondance_CLC, by = "code_clc_niveau_3") |>
+  select(-name, -code_clc_niveau_3) |>
+  group_by(id_transect, `NOUVEAU LIBELLE`) |>
+  dplyr::summarise(surface = sum(value))
+buffer_1000_prai_long
+```
+
+```{r}
+buffer_1000_prai_n <- buffer_1000_prai_long |>
+  pivot_wider(names_from = "NOUVEAU LIBELLE", values_from = "surface")
+buffer_1000_prai_n
+```
+```{r}
+buffer_1000_prai_n |>
+  filter(id_transect == "1122_Bassin de rétention")
+```
+
+####  Nouvelle occupation sol 
+
+```{r}
+n_occupation_sol_1000_prai <- buffer_1000_prai_n |>
+  column_to_rownames("id_transect") %>%
+  mutate_all(function(x){x/rowSums(.)*100})
+  #pour vérifier
+  #mutate(somme = rowSums(.)) 
+n_occupation_sol_1000_prai
+```
+```{r}
+n_occupation_sol_1000_prai |>
+  rownames_to_column("id_transect") |>
+  filter(id_transect == "1122_Bassin de rétention")
+```
+
+
+####  ACP 1000 Stats
+
+```{r}
+pour_ACP_1000 <- n_occupation_sol_1000_prai 
+rownames(pour_ACP_1000) <- NULL
+```
+
++ Avec `stats` 
+
+```{r}
+#n_acp_1000 <- prcomp(pour_ACP_1000)
+n_acp_1000 <- prcomp(n_occupation_sol_1000_prai)
+summary(n_acp_1000)
+biplot(n_acp_1000)
+```
+```{r}
+library(factoextra) # pour les représentations graphiques des ACP
+fviz_pca_var(n_acp_1000,
+             axes = c(1,2),
+             repel = TRUE)
+```
+
+
+
+```{r}
+fviz_pca_ind(n_acp_1000,
+             geom = "point",
+             #col.ind = table_transect_hab$habitat,
+             axes = c(1,2),
+             repel = TRUE)
+```
+
+
+```{r}
+# récupération des coordonnées 
+coords_1_2_1000 <- n_acp_1000$x[,1:2]
+
+#récupération des 2 premiers axes
+n_acp_1000$rotation[,1:2]
+```
+```{r}
+# Création de la table
+coords_1_2_1000 <- as.data.frame(coords_1_2_1000) |>
+  dplyr::rename(axe1_1000 = PC1, axe2_1000 = PC2) |>
+  rownames_to_column("id_transect")
+coords_1_2_1000
+```
+#### ACP 1000 FactorMineR
+
++ Avec FactoMineR
+
+```{r}
+n_occupation_sol_1000_prai
+```
+
+
+```{r}
+library(FactoMineR)
+result_ACP_1000 <- PCA(n_occupation_sol_1000_prai, graph = F, ncp = ncol(n_occupation_sol_1000_prai))
+p <- fviz_pca_var(result_ACP_1000,
+             axes = c(1,2),
+             repel = TRUE) +
+  ggtitle("Prairies échelle 1000 m") 
+p
+
+ggsave("acp_buffer1000_1_2_prai.png", p, width = 8, height = 6)
+```
+**Commentaires** : 
+- Dim 1 : Gauche : Territoires artificialisés
+- Dim 1 & 2 : Bas à Droite : Territoires agricoles
+- Au centre : naturel 
+
+
+```{r}
+fviz_pca(result_ACP_1000,
+             geom = "point",
+             axes = c(1,2),
+             repel = TRUE)
+```
+
+```{r}
+result_ACP_1000$eig
+```
+**Commentaire** : 57% de variance expliquée sur les 3 axes 
+
+```{r}
+# recuperation des coordonnées des sites sur les 3 premiers axes
+coord_sites_axes_1000_PCA <- result_ACP_1000$ind$coord[,1:4]
+# récupération de la signification des axes 
+result_ACP_1000$var$coord[,1:4]
+```
+```{r}
+# Création de la table
+coords_1_2_3_1000 <- as.data.frame(coord_sites_axes_1000_PCA) |>
+  dplyr::rename(axe1_1000 = Dim.1, axe2_1000 = Dim.2, axe3_1000 = Dim.3, axe4_1000 = Dim.4) |>
+  rownames_to_column("id_transect")
+coords_1_2_3_1000
+```
+
+```{r}
+library(rgl) #Pour la représentation 3D
+plot3d(x = coords_1_2_3_1000[, 2], 
+       y = coords_1_2_3_1000[, 3], 
+       z = coords_1_2_3_1000[, 4], 
+       #col = as.numeric(iris$Species),
+       #type = "s",
+       size = 1, 
+       xlab = "PC1", ylab = "PC2", zlab = "PC3")
+
+# Add legend
+#legend3d("topright", legend = levels(iris$Species), pch = 16, col = 1:3)
+
+```
+
+### b) Nouvelles tables 5000
+
+
+```{r}
+buffer_5000_prai_long <- buffer_5000_prai |>
+  pivot_longer(2:38) |>
+  mutate(code_clc_niveau_3 = as.numeric(substring(name, 2, 4))) |>
+  left_join(table_correspondance_CLC, by = "code_clc_niveau_3") |>
+  select(-name, -code_clc_niveau_3) |>
+  group_by(id_transect, `NOUVEAU LIBELLE`) |>
+  dplyr::summarise(surface = sum(value))
+buffer_5000_prai_long
+```
+
+```{r}
+buffer_5000_prai_n <- buffer_5000_prai_long |>
+  pivot_wider(names_from = "NOUVEAU LIBELLE", values_from = "surface")
+```
+
+#### Nouvelle occupation sol 
+
+```{r}
+n_occupation_sol_5000_prai <- buffer_5000_prai_n |>
+  column_to_rownames("id_transect") %>%
+  mutate_all(function(x){x/rowSums(.)*100})
+  #pour vérifier
+  #mutate(somme = rowSums(.)) 
+n_occupation_sol_5000_prai
+```
+```{r}
+n_occupation_sol_5000_prai |>
+  rownames_to_column("id_transect") |>
+  filter(id_transect == "1122_Bassin de rétention")
+```
+
+
+#### ACP nouvelles occupations 5000
+
+```{r}
+pour_ACP_5000 <- n_occupation_sol_5000_prai 
+rownames(pour_ACP_5000) <- NULL
+```
+
++ Avec `stats`
+
+```{r}
+n_acp_5000 <- prcomp(n_occupation_sol_5000_prai)
+summary(n_acp_5000)
+biplot(n_acp_5000)
+```
+```{r}
+fviz_pca_var(n_acp_5000,
+             axes = c(1,2),
+             repel = TRUE)
+```
+```{r}
+fviz_pca_ind(n_acp_5000,
+             geom = "point",
+             axes = c(1,2))
+```
+```{r}
+# récupération des coordonnées 
+coords_1_2_5000 <- n_acp_5000$x[,1:2]
+
+#récupération des 2 premiers axes
+n_acp_5000$rotation[,1:2]
+
+
+```
+```{r}
+# Création de la table
+coords_1_2_5000 <- as.data.frame(coords_1_2_5000) |>
+  dplyr::rename(axe1_5000 = PC1, axe2_5000 = PC2) |>
+  rownames_to_column("id_transect")
+
+```
+
+#### ACP 5000 FactorMineR
+
++ Avec FactoMineR
+
+```{r}
+result_ACP_5000 <- PCA(n_occupation_sol_5000_prai, graph = F, ncp = ncol(n_occupation_sol_5000_prai))
+p <-fviz_pca_var(result_ACP_5000,
+             axes = c(1,2),
+             repel = TRUE) +
+  ggtitle("Prairies échelle 5000m") 
+#ggsave("acp_buffer5000_1_2_prai.png", p, width = 8, height = 6)
+```
+**Commentaires** : 
+- Dim 1 : Gauche Toute : Territoires artificialisés [plus flagrant que buffer 1000]
+- Dim 1 & 2 : Bas à Droite : Territoires agricoles [plus flagrant que le buffer 1000]
+- Dim 2 Haut Droite :  Milieux naturels ouverts et secs [avec ou sans végétation] 
+
+
+```{r}
+fviz_pca(result_ACP_5000,
+             geom = "point",
+             #col.ind = result_ACP_1000$group,
+             axes = c(1,3),
+             repel = TRUE)
+```
+
+```{r}
+result_ACP_5000$eig
+```
+
+**Commentaire** : 67% de variance expliquée sur les 3 axes 
+
+```{r}
+# recuperation des coordonnées des sites sur les 2 premiers axes
+coord_sites_axes_5000_PCA <- result_ACP_5000$ind$coord[,1:3]
+# récupération de la signification des axes 
+result_ACP_5000$var$coord[,1:3]
+```
+
+```{r}
+# Création de la table
+coords_1_2_3_5000 <- as.data.frame(coord_sites_axes_5000_PCA) |>
+  dplyr::rename(axe1_5000 = Dim.1, axe2_5000 = Dim.2, axe3_5000 = Dim.3) |>
+  rownames_to_column("id_transect")
+coords_1_2_3_5000
+var_buffers_ACP <- coords_1_2_3_1000 |>
+  inner_join(coords_1_2_3_5000, by = "id_transect")
+var_buffers_ACP
+```
+
+
+```{r}
+library(rgl) #Pour la représentation 3D
+plot3d(x = coords_1_2_3_5000[, 2], 
+       y = coords_1_2_3_5000[, 3], 
+       z = coords_1_2_3_5000[, 3], 
+       #col = as.numeric(iris$Species),
+       #type = "s",
+       size = 1, 
+       xlab = "PC1", ylab = "PC2", zlab = "PC3")
+```
+
+### c) Nouvelles tables 10000
+
+
+
+```{r}
+buffer_10000_prai_long <- buffer_10000_prai |>
+  pivot_longer(2:41) |>
+  mutate(code_clc_niveau_3 = as.numeric(substring(name, 2, 4))) |>
+  left_join(table_correspondance_CLC, by = "code_clc_niveau_3") |>
+  select(-name, -code_clc_niveau_3) |>
+  group_by(id_transect, `NOUVEAU LIBELLE`) |>
+  dplyr::summarise(surface = sum(value))
+buffer_10000_prai_long
+```
+
+```{r}
+buffer_10000_prai_long |>
+  filter(id_transect == "1122_Bassin de rétention") 
+```
+```{r}
+sum(buffer_10000_prai_long$surface[buffer_1000_prai_long$id_transect == "1122_Bassin de rétention"])
+```
+```{r}
+buffer_10000_prai_long |>
+  filter(`NOUVEAU LIBELLE` == "Surfaces en eau et Zones humides") 
+```
+
+
+
+
+```{r}
+buffer_10000_prai_n <- buffer_10000_prai_long |>
+  pivot_wider(names_from = "NOUVEAU LIBELLE", values_from = "surface")
+```
+
++ Nouvelle occupation sol 
+
+```{r}
+n_occupation_sol_10000_prai <- buffer_10000_prai_n |>
+  column_to_rownames("id_transect") %>%
+  mutate_all(function(x){x/rowSums(.)*100}) 
+  #pour vérifier
+  #mutate(somme = rowSums(.)) 
+n_occupation_sol_10000_prai
+```
+
+
+```{r}
+n_occupation_sol_10000_prai |>
+  rownames_to_column("id_transect") |>
+  filter(id_transect == "1122_Bassin de rétention")
+```
+
+ + ACP nouvelles occupations 10000
+
+```{r}
+pour_ACP_10000 <- n_occupation_sol_10000_prai 
+rownames(pour_ACP_10000) <- NULL
+  
+n_acp_10000 <- prcomp(pour_ACP_10000)
+summary(n_acp_10000)
+biplot(n_acp_10000)
+```
+
+#### ACP 10000
+
++ Avec `stats` 
+
+```{r}
+#n_acp_1000 <- prcomp(pour_ACP_1000)
+n_acp_10000 <- prcomp(n_occupation_sol_10000_prai)
+summary(n_acp_10000)
+#biplot(n_acp_10000)
+```
+```{r}
+fviz_pca_var(n_acp_10000,
+             axes = c(1,2),
+             repel = TRUE)
+```
+
+```{r}
+fviz_pca_ind(n_acp_10000,
+             geom = "point",
+             #col.ind = n_acp_1000$group,
+             axes = c(1,2),
+             repel = TRUE)
+```
+```{r}
+# récupération des coordonnées 
+coords_1_2_10000 <- n_acp_10000$x[,1:2]
+
+#récupération des 2 premiers axes
+n_acp_10000$rotation[,1:2]
+
+# Création de la table
+coords_1_2_10000 <- as.data.frame(coords_1_2_10000) |>
+  dplyr::rename(axe1_10000 = PC1, axe2_10000 = PC2) |>
+  rownames_to_column("id_transect")
+
+```
+
+#### ACP 10000 FactorMineR
+
++ Avec FactoMineR
+
+```{r}
+result_ACP_10000 <- PCA(n_occupation_sol_10000_prai, graph = F, ncp = ncol(n_occupation_sol_10000_prai))
+p <- fviz_pca_var(result_ACP_10000,
+             axes = c(1,2),
+             repel = TRUE)+
+  ggtitle("Prairies échelle 10000 m") 
+p
+ggsave("acp_buffer10000_1_2_prai.png", p, width = 8, height = 6)
+```
+**Commentaires** : 
+- Plus personne en bas à gauche. Regarder axes 2 et 3 peut être.
+- Dim 1 : Gauche Toute : Territoires artificialisés [idem 5000]
+- Dim 1 & 2 : Bas à Droite : Territoires agricoles [plus flagrant que le buffer 1000] + Surface en eau
+- Dim 2 Haut Droite :  Milieux naturels ouverts et secs [avec ou sans végétation]  [plus flagrant que le buffer 5000]
+
+```{r}
+result_ACP_10000 <- PCA(n_occupation_sol_10000_prai, graph = F, ncp = ncol(n_occupation_sol_10000_prai))
+fviz_pca_var(result_ACP_10000,
+             axes = c(1,3),
+             repel = TRUE)
+
+```
+
+```{r}
+fviz_pca(result_ACP_10000,
+             geom = "point",
+             #col.ind = result_ACP_1000$group,
+             axes = c(2,3),
+             repel = TRUE)
+```
+
+```{r}
+result_ACP_10000$eig
+```
+**Commentaire** : 71% de variance expliquée sur les 3 axes 
+
+Plus on s'éloiggne, plus la variance expliquée augmente => les milieux sont plus homogènes? 
+Attention tout de même à la fragmentation
+
+```{r}
+# recuperation des coordonnées des sites sur les 3 premiers axes
+coord_sites_axes_10000_PCA <- result_ACP_10000$ind$coord[,1:3]
+# récupération de la signification des axes 
+result_ACP_10000$var$coord[,1:3]
+```
+
+```{r}
+# Création de la table
+coords_1_2_3_10000 <- as.data.frame(coord_sites_axes_10000_PCA) |>
+  dplyr::rename(axe1_10000 = Dim.1, axe2_10000 = Dim.2, axe3_10000 = Dim.3) |>
+  rownames_to_column("id_transect")
+coords_1_2_3_10000
+var_buffers_ACP <- var_buffers_ACP |>
+  inner_join(coords_1_2_3_10000, by = "id_transect")
+var_buffers_ACP
+```
+```{r}
+var_buffers_ACP <- var_buffers_ACP |>
+  mutate(id_transect = case_when(
+    id_transect == "2_Lac du Héron vmclher 179 RNR \\jachères pavés\\" ~ '2_Lac du Héron vmclher 179 RNR "jachères pavés"',
+    id_transect == "2_Lac du Héron vmclher 193 RNR \\Friche\\" ~ '2_Lac du Héron vmclher 193 RNR "Friche"',
+    TRUE ~ id_transect
+  )) 
+
+```
+
+```{r}
+var_buffers_ACP |>
+  arrange(by = id_transect)
+```
+
+
+```{r}
+write_csv(var_buffers_ACP, "/Users/sariakasalomon-ramialison/Desktop/Propage/var_buffers_ACP.csv")
+```
+
+
+```{r}
+library(rgl) #Pour la représentation 3D
+plot3d(x = coords_1_2_3_10000[, 2], 
+       y = coords_1_2_3_10000[, 3], 
+       z = coords_1_2_3_10000[, 3], 
+       #col = as.numeric(iris$Species),
+       #type = "s",
+       size = 1, 
+       xlab = "PC1", ylab = "PC2", zlab = "PC3")
+```
+
+# 5. Corrélation entre les variables
+
+```{r}
+library(corrplot)
+```
+
+```{r}
+table_corr_pays <-  var_buffers_ACP |>
+  column_to_rownames("id_transect")
+
+corrplot(cor(table_corr_pays)) 
+cor(table_corr_pays)
+#ggsave("corrplot_axes_prai.png", table_corr_pays, width = 8, height = 6)
+```
++ Conclusion :On enlève l'axe1_5000 et l'axe2_5000. Y a t il un interet à garder l'axe 3 5000?
+
+```{r}
+table_corr_pays <-  var_buffers_ACP |>
+  select(id_transect, axe1_1000, axe2_1000, axe1_5000, axe2_5000, axe1_10000, axe2_10000) |>
+  column_to_rownames("id_transect")
+library(corrplot)
+corrplot(cor(table_corr_pays))
+mprai <- cor(table_corr_pays)
+
+png("coorplot_prai.png", width = 800, height = 600)
+corrplot(mprai)
+dev.off()
+```
+
+```{r}
+library(xtable)
+xtable(cor(table_corr_pays))
+```
+# 6. Exemples 
+
+### 6.1 avec 1122_Bassin de rétention
+
+
+```{r}
+l1 <- n_occupation_sol_1000_prai |>
+  rownames_to_column("id_transect") |>
+  filter(id_transect == "1122_Bassin de rétention")
+l2 <- n_occupation_sol_5000_prai |>
+  rownames_to_column("id_transect") |>
+  filter(id_transect == "1122_Bassin de rétention")
+l3 <- n_occupation_sol_10000_prai |>
+  rownames_to_column("id_transect") |>
+  filter(id_transect == "1122_Bassin de rétention")
+table_bassin <- rbind(l1, l2, l3)
+table_bassin
+```
+
+
+```{r}
+Échelle <- c("Échelle 1000", "Échelle 5000", "Échelle 10000")
+table_bassin <- cbind(table_bassin, Échelle) |>
+  select(-id_transect) |>
+  relocate(Échelle, 1) |>
+  column_to_rownames("Échelle") |>
+  mutate_if(is.numeric, ~ round(.,2)) |>
+  dplyr::rename("7.Ouvert sans végétation" = "Espaces ouverts, sans ou avec peu de végétation",
+      "5.Forêts"= "Forêts",
+         "4.Agricoles hétérogènes" = "Prairies et Zones agricoles hétérogènes",
+         "3.Cultures" = "Terres arables et/ou Cultures permanentes",
+         "1.Territoires artificialisés" = "Territoires artificialisés sans végétation",
+         "2.Urbain discontinu" = "Tissu urbain discontinu",
+         "6.Ouvert avec végétation" = "Végétation arbustive et/ou herbacée",
+         "8.Zones humides" = "Surfaces en eau et Zones humides"
+        )
+
+table_bassin
+```
+```{r}
+table_bassin <- table_bassin %>%
+  dplyr::select(order(colnames(.)))
+table_bassin
+```
+
+```{r}
+table_bassin2 <- table_bassin |>
+  dplyr::rename_with(~ as.character(seq(1,8)))
+table_bassin2
+```
+
+
+```{r}
+library(xtable)
+xtable(table_bassin2)
+```
+
+
+```{r}
+n_occupation_sol_1000_prai
+```
+#### Test en utilisant les tables de pourcentage. OK c'etait des pourcentages de grands habitats 
+
+```{r}
+che1000 = "/Users/sariakasalomon-ramialison/Desktop/Propage/paysage_1000.csv"
+che5000 = "/Users/sariakasalomon-ramialison/Desktop/Propage/paysage_5000.csv"
+che10000 = "/Users/sariakasalomon-ramialison/Desktop/Propage/paysage_10000.csv"
+```
+
+
+### 6.2 avec 1121_parcdel'abbaye.... 
+
+ben c'est pas possible, c'est pas une prairie :(
+
+
+```{r}
+table_correspondance_CLC
+```
+```{r}
+unique(table_correspondance_CLC$code_clc_niveau_3)
+```
+
