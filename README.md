@@ -58,3 +58,32 @@ Tests statistiques : influence des variables des gestion sur les données de 15 
 On a enlevé tous les relevés sans observation.
 Premiers modèles (mais il y aura d'autres fichiers plus complets avec tous les modèles)
 
+## III. Dossier propage_pays
+
+[Indépendant de **TOUT** ce qui a été fait précédemment !]
+
+Ici les codes et fichiers qui traitent des données paysagères. 
+
+#### 1. Tables utiles
++ `coord_propage.csv` : Table contenant les coordonnées moyennes de chaque transect.
++ Dossier `Corine` : Fichiers de la base de donnée Corine land cover de 2018.
++ `RE_classement_CLC.xlsx` : Table de redéfinition des niveaux CLC en milieux plus "cohérents" pour une étude de communautés de papillons. 
+  
+#### 2. Code `extractclc_propage.R`
+THE code qui permet d'extraire l'occupation du sol autour de chaque transect (de son point moyen).
+  - Dans les tables nommées `buffer_XXXX_complete.csv`, on a les *surfaces* représentées par chaque type de paysage du *niveau 3* de la nomenclature CLC.
+  - Dans les tables nommées `buffer_XXX_CLC_grossier.csv`, on a les *surfaces* représentées par les 5 types de paysage du *niveau 1* de la nomenclature CLC.
+  - Dans les tables nommées `paysage_XXXX.csv`, on a les *pourcentage d'occupation* représentées par chaque type de paysage du *niveau 3* de la nomenclature CLC.
+
+**Rem** : Ce magnique code n'est pas de moi, il m'a été tranmis par Maud Weber, qui elle-même l'a hérité de Victor Quilichini. Certaines lignes du codes peuvent être assez longues à exécuter donc pas de panique.
+
+#### 3. Fichier 'ACP_paysage.Rmd'
+
+THE fichier qui permet de récupérer les variables paysagères que l'on va intégrer dans les modèles.
++ On construit des nouvelles tables de pourcentage d'occupation du sol selon les 8 milieux définis dans `RE_classement_CLC.xlsx`
++ On fait ensuite des ACP pour retenir les 2 axes principaux, variables qui représentant au mieux le paysage. 
+
+Les deux fichiers suivants :
+- 'ACP_paysage_prai.Rmd'
+- 'ACP_paysage_pel.Rmd'
+sont des clones du précédent. Mais en ne sélectionnant que les données du milieu concerné (prairie ou pelouse).
