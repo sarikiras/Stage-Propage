@@ -69,7 +69,8 @@ Ici les codes et fichiers qui traitent des données paysagères.
 
 #### 1. Tables utiles
 + `coord_propage.csv` : Table contenant les coordonnées moyennes de chaque transect.
-+ Dossier `Corine` : Fichiers de la base de donnée Corine land cover de 2018 (à compléter car il manque les plus gros -et accessoirement les plus importants - que je n'ai pas pu mettre sur le gitHub car trop volumineux. )
++ Dossier **Corine** : Fichiers de la base de donnée Corine land cover de 2018 (à compléter car il manque les plus gros -et accessoirement les plus importants ah ah - que je n'ai pas pu mettre sur le gitHub car trop volumineux ie `824_sdes_occupation_clc_metropole_2018.dbf`et `
+824_sdes_occupation_clc_metropole_2018.shp`)
 + `RE_classement_CLC.xlsx` : Table de redéfinition des niveaux CLC en milieux plus "cohérents" pour une étude de communautés de papillons. 
   
 #### 2. Code `extractclc_propage.R`
