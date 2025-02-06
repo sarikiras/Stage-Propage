@@ -1,6 +1,7 @@
 # Stage-Propage
 
 La plupart des codes du Stage. 
+
 **_Avertissement_** : Ces codes n'étaient pas destinés à être publiés. Les fichers *.Rmd sont plus ou moins structurés (cf l'outline),
 mais il arrive qu'à l'intérieur d'une partie, ça parte dans tous les sens, car il s'agit de mon travail de réflexion.
 
@@ -68,7 +69,7 @@ Ici les codes et fichiers qui traitent des données paysagères.
 
 #### 1. Tables utiles
 + `coord_propage.csv` : Table contenant les coordonnées moyennes de chaque transect.
-+ Dossier `Corine` : Fichiers de la base de donnée Corine land cover de 2018.
++ Dossier `Corine` : Fichiers de la base de donnée Corine land cover de 2018 (à compléter car il manque les plus gros -et accessoirement les plus importants - que je n'ai pas pu mettre sur le gitHub car trop volumineux. )
 + `RE_classement_CLC.xlsx` : Table de redéfinition des niveaux CLC en milieux plus "cohérents" pour une étude de communautés de papillons. 
   
 #### 2. Code `extractclc_propage.R`
