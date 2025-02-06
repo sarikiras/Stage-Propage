@@ -55,11 +55,37 @@ C'est ici que j'effectue toutes les transformation utiles pour le Stage:
 
 #### 2. Prairies_15ans_corr_sans0.Rmd
 
-**Fichier liés** : data_clean.Rmd, EDA_ind_taxo.Rmd, indic_taxo_env.Rmd
+**Fichier liés** : Prairies_corrigees.Rmd
 
 Tests statistiques : influence des variables des gestion sur les données de 15 ans.
 On a enlevé tous les relevés sans observation.
 Premiers modèles (mais il y aura d'autres fichiers plus complets avec tous les modèles)
+
+#### 3. Prairies_modeles.Rmd
+
+**Fichier liés** : Prairies_corrigees.Rmd
+
+Plein de tests de modèles sur la densité avec et sans effets aléatoires.
+
+#### 4. Prairies_modeles_effaleasp.Rmd
+
+**Fichier liés** : Prairies_modèles.Rmd
+
+Modèles sur la log-densité en rajoutant l'effet aléatoire espèce.
+
+**Attention** : on ne travaille pas sur la même table que dans le fichier précédent! Il faut une table longue.
+
+#### 5. Prairies_modeles_richesse.Rmd
+
+Fichier autonome car télécharge des dataframes qui sont enregistrées dans le fichier table :)
+
+Plein d'essais de modèles sur la richesse : utilisation de lois discrètes (Poisson, negative binomial)
+
+#### 5. Prairies_modeles_Shannon.Rmd
+
+Fichier autonome car télécharge des dataframes qui sont enregistrées dans le fichier table :)
+
+Plein d'essais de modèles sur l'indice de Shannon : utilisation de lois continues (et bizarre comme Hurdle) 
 
 ## III. Dossier propage_pays
 
