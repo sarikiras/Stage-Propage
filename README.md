@@ -1,6 +1,8 @@
 # Stage-Propage
 
-La plupart des codes du Stage. En bazar...
+La plupart des codes du Stage. 
+**_Avertissement_** : Ces codes n'étaient pas destinés à être publiés. Les fichers *.Rmd sont plus ou moins structurés (cf l'outline),
+mais il arrive qu'à l'intérieur d'une partie, ça parte dans tous les sens, car il s'agit de mon travail de réflexion.
 
 Les donnnées se trouvent dans `all_data_propage20240201.xlsx` (fichier all_data_propage20240201.xlsx.zip à dézipper).
 
