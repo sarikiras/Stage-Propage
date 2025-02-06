@@ -1,0 +1,1633 @@
+---
+title: "Prairies modèles sur la richesse"
+author: "Sariaka Ramialison"
+date: "2024-05-24"
+output: html_document
+---
+
+FICHIER AUTONOME!!!
+Variable d'intérêt : `SPrai_sp`
+
+
+```{r}
+library(tidyverse)
+library(viridis)
+library(glmmTMB)
+library(performance)
+library(emmeans)
+library(MASS)
+library(FSA)
+library(ggpubr) #pour le ggboxplot
+```
+
+
++ Conflits 
+
+```{r}
+# petite précaution pour résoudre un conlit MASS/dplyr
+library(conflicted)
+conflict_prefer("filter", "dplyr")
+conflict_prefer("select", "dplyr")
+```
+
+
+Rappel : On a enlevé ici les morphogroupes
+
+```{r}
+# table construite dans Prairies_modeles
+
+che <- "tables/super_table_prai.csv"
+super_table_prai <- read_csv(che, show_col_types = FALSE)
+super_table_prai
+```
+
+
+```{r}
+coord <- read.csv("tables/coord_propage.csv")
+coord
+```
+
+```{r}
+# je ne garde que le dernier point moyen si le transect a été défini plusieurs fois 
+coords_unique <- coord |>
+  group_by(id_transect) |>
+  summarise_at(vars(long, lat), last)
+  
+```
+
+```{r}
+super_table_prai <- super_table_prai |>
+  left_join(coords_unique, by = "id_transect")
+```
+
+```{r}
+var_buffers_ACP <- read_csv("tables/var_buffers_ACP.csv", show_col_types = FALSE)
+var_buffers_ACP
+```
+```{r}
+# rajout de l'axe_4
+# super_table_prai <- super_table_prai |>
+#   left_join(select(var_buffers_ACP, id_transect, axe4_1000),
+#             by = "id_transect")
+```
+
+# I. Stats descriptives 
+
+#### a. Distribution de la richesse 
+
+```{r}
+super_table_prai |>
+  ggplot(aes(x = SPrai_sp)) +
+  geom_bar(fill = viridis(1)) +
+  scale_x_continuous(breaks = 0:max(super_table_prai$SPrai_sp)) +
+  labs(x= "Richesse spécifique", 
+       y = "Fréquence", 
+       title = paste("Prairies \nDistribution de la Richesse spécifique \nNombre de transects :", nrow(super_table_prai))) +
+  theme_minimal()
+```
+Distribution de Poisson (ou négative binomiale)
+
+#### b. Effet de la fauche sur la richesse
+
++ Table fauche prairies
+
+
+```{r}
+# Table à garder pour les autres indices de diversité taxo
+table_F_prai <- super_table_prai |>
+  group_by(degre_fauche) |>
+  summarise(n=n()) |>
+  as.data.frame() 
+table_F_prai
+```
+
++ Représentation graphique
+
+```{r}
+super_table_prai |>
+  ggplot(aes(x = degre_fauche, y = SPrai_sp, fill = degre_fauche)) + 
+  geom_boxplot(show.legend = FALSE) +
+  geom_hline(yintercept = mean(super_table_prai$SPrai_sp), color='red') +
+  theme_minimal() +
+  scale_fill_brewer() +
+  #scale_fill_viridis_d("A") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  geom_text(data = table_F_prai,
+            aes(label = paste("n =", n)), # Affichage de l'effectif au-dessus des boxplots
+            x = table_F_prai$degre_fauche,
+            y = Inf ,
+            vjust = 0.9,
+            size = 3
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size =11)) +
+  labs(x = "Rythme fauchage prairie", 
+       y = "Richesse", 
+       title = paste("Effet de la fauche sur la Richesse Spécifique \nPrairies \nNb transects =", nrow(super_table_prai)),
+       fill="") 
+```
+
+
+
+
+#### c. Effet paturage sur la richesse
+
++ Table paturage prairies 
+
+```{r}
+# Table à garder pour les autres indices de diversité taxo
+table_P_prai <- super_table_prai |>
+  group_by(transect_paturage_prairie) |>
+  summarise(n=n()) 
+table_P_prai
+```
++ Représentation graphique
+
+```{r}
+super_table_prai |>
+  ggplot(aes(x = transect_paturage_prairie, y = SPrai_sp, fill = transect_paturage_prairie)) + 
+  geom_boxplot(show.legend = FALSE) +
+  geom_hline(yintercept = mean(super_table_prai$SPrai_sp), color='red') +
+  theme_minimal() +
+  scale_fill_brewer() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  geom_text(data = table_P_prai,
+            aes(label = paste("n =", n)), # Affichage de l'effectif au-dessus des boxplots
+            x = table_P_prai$transect_paturage_prairie,
+            y = Inf ,
+            vjust = 0.9,
+            size = 3
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size =11)) +
+  labs(x = "", 
+       y = "Richesse", 
+       title = paste("Effet du paturage sur la Richesse Spécifique \nPrairies \nNb transects =", nrow(super_table_prai)),
+       fill="") 
+```
+A priori pas d'effet de paturage... A voir dans le modèle 
+
+#### d. Effet semis/sursemis
+
++ Table Semis/Sursemis prairies. On enlève les "Je ne sais pas"
+
+```{r}
+# Table à garder pour les autres indices de diversité taxo
+table_semis_prai <- super_table_prai |>
+  filter(semis_sursemis != "Je ne sais pas") |>
+  group_by(semis_sursemis) |>
+  summarise(n=n()) 
+table_semis_prai
+```
+
++ Représentation graphique [on en enlève je ne sais pas ]
+
+```{r}
+super_table_prai |>
+  filter(semis_sursemis != "Je ne sais pas") |>
+  ggplot(aes(x = semis_sursemis, y = SPrai_sp, fill = semis_sursemis)) + 
+  geom_boxplot(show.legend = FALSE) +
+  geom_hline(yintercept = mean(super_table_prai$SPrai_sp[super_table_prai$semis_sursemis != "Je ne sais pas"]), color='red') +
+  theme_minimal() +
+  scale_fill_brewer() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  geom_text(data = table_semis_prai,
+            aes(label = paste("n =", n)), # Affichage de l'effectif au-dessus des boxplots
+            x = table_semis_prai$semis_sursemis,
+            y = Inf ,
+            vjust = 0.9,
+            size = 3
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size =11)) +
+  labs(x = "", 
+       y = "Richesse", 
+       title = paste("Effet du semis sur la Richesse Spécifique \nPrairies \nNb transects =", nrow(super_table_prai[super_table_prai$semis_sursemis != "Je ne sais pas",])),
+       fill="") 
+```
+**Commentaire** : Le fait de ne pas semer fait-elle augmenter la richesse spécifique? Y aurait-il plus sde diversité lorsqu'on ne sème pas???
+
+
+#### e. Effet habitat
+
++ Table Habitat 
+
+
+```{r}
+table_Hab_prai<- super_table_prai |>
+  as.data.frame() |>
+  group_by(classe_habitat, habitat) |>
+  summarise(n=n()) 
+table_Hab_prai
+```
+
+**Commentaires** : On avait a priori selectionné des Prairies. 
+1. Ce tableau montre des différences d'habitat : cela est du à l'échelle de CLC 1/100 000. 
+Vu dans le guide d'Utilisation **"Des limites d’usage découlent de ce choix : la gestion locale d’espaces sensibles ou la surveillance de territoires précis relèvent d’échelles plus précises comme le 1/50 000 ou le 1/25 000 et nécessitent la description d’unités de moins de 25 hectares"**
+2. On voit quand même une prépondérance du Tissu urbain discontinu : qui est le cadre de notre étude.
+3. Niveau 0.1 : Artificiel 
+Niveau : 2.3 : Agricole
+Niveau : 4.6 : Milieux naturels 
+Niveau : 7 Eau 
+
+```{r}
+# Table de résumé 
+milieu <- c("Artificiel", "Agricole", "Naturel", "Humide" )
+n <- c(765, 179, 87, 15)
+pie(n, labels = milieu, col = viridis(4), main = "Répartition des milieux des Prairies")
+table_milieux <- as.data.frame(cbind(milieu, n))
+table_milieux
+```
+
++ Représentation graphique
+
+
+```{r}
+# boxplot
+plot <- super_table_prai |>
+  ggplot(aes(x=classe_habitat, y=SPrai_sp, fill=classe_habitat)) + 
+  geom_boxplot(show.legend = FALSE) +
+  geom_hline(yintercept = mean(super_table_prai$SPrai_sp), color='red') +
+  geom_text(data = table_Hab_prai,
+            aes(label = paste("n =", n)), # Affichage de l'effectif au-dessus des boxplots
+            x = table_Hab_prai$classe_habitat,
+            y = Inf ,
+            vjust = 0.9,
+            size = 3
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size =11)) +
+  labs(x = "Habitat", 
+       y = "Richesse", 
+       title = paste("Richesse et Habitats \nNb transects :",
+                     nrow(super_table_prai)), 
+       fill="") 
+plot
+
+# violin_plot
+plot1 <- super_table_prai |>
+  ggplot(aes(x=classe_habitat, y=SPrai_sp, fill=classe_habitat)) + 
+  geom_violin(show.legend = FALSE) +
+  geom_hline(yintercept = mean(super_table_prai$SPrai_sp), color='red') +
+  geom_text(data = table_Hab_prai,
+            aes(label = paste("n =", n)), # Affichage de l'effectif au-dessus des boxplots
+            x = table_Hab_prai$classe_habitat,
+            y = Inf ,
+            vjust = 0.9,
+            size = 3
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size =11)) +
+  labs(x = "Habitat", 
+       y = "Richesse", 
+       title = paste("Richesse et Habitats \nNb transects :",
+                     nrow(super_table_prai)), 
+       fill="") 
+plot1
+```
+**Commentaires** : A priori, différence flagrante du milieu naturel MAIS peu de données!
+Mileux agricoles favorables à la richesse mais bcp de variabilité. 
+Sur les territoires artificiels : regarder s'il y a une différence significative entre Tissu urbon discontinu et les autre
+
+#### f. Interactions Fauche*Paturage
+
++ Table
+
+
+```{r}
+table_FP_prai <- super_table_prai |>
+  group_by(transect_paturage_prairie, degre_fauche) |>
+  summarise(n=n()) |>
+  as.data.frame()
+table_FP_prai
+```
+
+
+```{r}
+super_table_prai |>
+  ggplot(aes(x = transect_paturage_prairie, y = SPrai_sp, fill = degre_fauche)) + 
+  geom_boxplot() +
+  geom_hline(yintercept = mean(super_table_prai$SPrai_sp), color='red') +
+  theme_minimal() +
+  geom_text(data = table_FP_prai,
+            aes(x = c(seq(0.7, 1.3, 0.2),seq(1.7, 2.3, 0.2)),
+                y = 11,
+                label = paste("n =", n),
+                group = degre_fauche), # Affichage de l'effectif au-dessus des boxplots
+            vjust = 0.9,
+            size = 3
+  ) +
+  theme(plot.title = element_text(size =11),
+        legend.position = "right") +
+  labs(x = "", 
+       y = "Richesse", 
+       title = paste("Effet du paturage sur la Richesse Spécifique dans les Prairies \nNon pâturées : 942 \nPâturées : 104 \nNb transects =", nrow(super_table_prai)),
+       fill = "Rythme de fauche"
+       ) 
+```
+
+
++ Inversement
+TAble
+```{r}
+table_FP_prai_inv <- super_table_prai |>
+  group_by(degre_fauche, transect_paturage_prairie) |>
+  summarise(n=n()) |>
+  as.data.frame()
+table_FP_prai_inv
+```
+
+
+
+```{r}
+super_table_prai |>
+  ggplot(aes(x = degre_fauche, y = SPrai_sp, fill = transect_paturage_prairie)) + 
+  geom_boxplot() +
+  geom_hline(yintercept = mean(super_table_prai$SPrai_sp), color='red') +
+  theme_minimal() +
+  geom_text(data = table_FP_prai_inv,
+            aes(x = c(seq(0.9, 1.2, 0.3), seq(1.9, 2.2, 0.3), seq(2.9, 3.2, 0.3), seq(3.9, 4.2, 0.3)),
+                y = 11,
+                label = paste("n =", n),
+                group = transect_paturage_prairie), # Affichage de l'effectif au-dessus des boxplots
+            vjust = 0.9,
+            size = 3
+  ) +
+  theme(plot.title = element_text(size =11),
+        legend.position = "right") +
+  labs(x = "", 
+       y = "Richesse", 
+       title = paste("Effet du paturage sur la Richesse Spécifique dans les Prairies", nrow(super_table_prai)),
+       fill = "Rythme de fauche"
+       ) 
+```
+**Commentaires** : On pature sur des prairies Non fauchées ou Fauchées tardivement. 
+
+#### g.Interactions Fauche*Semis
+
++ Table
+
+```{r}
+table_FS_prai <- super_table_prai |>
+  filter(semis_sursemis != "Je ne sais pas") |>
+  group_by(semis_sursemis, degre_fauche) |>
+  summarise(n=n()) |>
+  as.data.frame()
+table_FS_prai
+```
+**Commentaire** : plutot logique, on ne peut pas faire de fauche précoce sur une prairie semée.
+En revanche, le plusieurs fauches m'étonne...
+
+On regarde les proportions
+
+```{r}
+par(mfrow = c(1, 2))
+plot1 <- pie(x= table_FS_prai$n[table_FS_prai$semis_sursemis == "Oui"],
+             labels = c("Non fauchée", "Fauche tardive", "Plusieurs fauches"),
+             main = "Fauches et prairies semées \nNb prairies : 102", 
+             col = viridis(3))
+
+plot2 <- pie(x= table_FS_prai$n[table_FS_prai$semis_sursemis == "Non"],
+             labels = c("Non fauchée", "Fauche tardive", "Fauche précoce", "Plusieurs fauches"),
+             main = "Fauches et prairies NON semées \nNb prairies : 904",
+             col = viridis(4))
+```
+
+
+```{r}
+super_table_prai |>
+  filter(semis_sursemis != "Je ne sais pas") |>
+  ggplot(aes(x = semis_sursemis, y = SPrai_sp, fill = degre_fauche)) + 
+  geom_boxplot() +
+  geom_hline(yintercept = mean(super_table_prai$SPrai_sp[super_table_prai$semis_sursemis != "Je ne sais pas"]), color='red') +
+  theme_minimal() +
+  geom_text(data = table_FS_prai,
+            aes(x = c(seq(0.7, 1.3, 0.2),seq(1.7, 2.3, 0.3)),
+                y = 11,
+                label = paste("n =", n),
+                group = degre_fauche), # Affichage de l'effectif au-dessus des boxplots
+            vjust = 0.9,
+            size = 3
+  ) +
+  theme(plot.title = element_text(size =11),
+        legend.position = "right") +
+  labs(x = "",
+       y = "Richesse",
+       title = paste("Effet du semis et de la fauche sur la Richesse Spécifique dans les Prairies \nNon semées : 904 \nSemées : 102 \nNb transects =", nrow(super_table_prai[super_table_prai$semis_sursemis != "Je ne sais pas",])),
+       fill = "Rythme de fauche"
+       )
+```
+On retrouve le fait que les Prairies semées ont globalement moins de Richesse que les Prairies Non Semées.
+Pour elles, pas de différence flagrante entre les différents rythmes de fauche?
+
+
++ Table inverse
+
+```{r}
+table_FS_prai_inv <- super_table_prai |>
+  filter(semis_sursemis != "Je ne sais pas") |>
+  group_by(degre_fauche, semis_sursemis) |>
+  summarise(n=n()) |>
+  as.data.frame()
+table_FS_prai_inv
+```
++ Représentation Graphique
+
+```{r}
+super_table_prai |>
+  filter(semis_sursemis != "Je ne sais pas") |>
+  ggplot(aes(x = degre_fauche, y = SPrai_sp, fill = semis_sursemis)) + 
+  geom_boxplot() +
+  geom_hline(yintercept = mean(super_table_prai$SPrai_sp[super_table_prai$semis_sursemis != "Je ne sais pas"]), color='red') +
+  theme_minimal() +
+  geom_text(data = table_FS_prai_inv,
+            aes(x = c(seq(0.9, 1.2, 0.3), seq(1.9, 2.2, 0.3), 3, seq(3.9, 4.2, 0.3)),
+                y = 11,
+                label = paste("n =", n),
+                group = semis_sursemis), # Affichage de l'effectif au-dessus des boxplots
+            vjust = 0.9,
+            size = 3
+  ) +
+  theme(plot.title = element_text(size =11),
+        legend.position = "right") +
+  labs(x = "", 
+       y = "Richesse", 
+       title = paste("Effet du semis et de la fauche sur la Richesse Spécifique dans les Prairies \nNb transects =", nrow(super_table_prai[super_table_prai$semis_sursemis != "Je ne sais pas",])),
+       fill = "Semis/Sursemis"
+  ) 
+```
+On dirait que la fauche tardive a un effet complètement négatif sur la Richesse sur les prairies semées 
+
+#### h.Interactions Semis*Paturages
+
+```{r}
+table_PS_prai <- super_table_prai |>
+  filter(semis_sursemis != "Je ne sais pas") |>
+  group_by(semis_sursemis, transect_paturage_prairie) |>
+  summarise(n=n()) |>
+  as.data.frame()
+table_PS_prai
+```
+```{r}
+par(mfrow = c(1, 2))
+plot1 <- pie(x= table_PS_prai$n[table_PS_prai$semis_sursemis == "Oui"],
+             labels = c("Non pâturée", "Pâturée"),
+             main = "Pâturages et prairies semées \nNb prairies : 102", 
+             col = viridis(2))
+
+plot2 <- pie(x= table_PS_prai$n[table_PS_prai$semis_sursemis == "Non"],
+             labels = c("Non pâturée", "Pâturée"),
+             main = "Pâturages et prairies NON semées \nNb prairies : 904",
+             col = viridis(2))
+
+```
+Les prairies semées sont un peu plus paturées mais ce n'est pas non plus flagrant dans nos données. 
+
+```{r}
+table_PS_prai_inv <- super_table_prai |>
+  filter(semis_sursemis != "Je ne sais pas") |>
+  group_by(transect_paturage_prairie, semis_sursemis) |>
+  summarise(n=n()) |>
+  as.data.frame()
+table_PS_prai_inv
+```
+
+# II. Anova et T-test
+
+## II.1. Modèle simple fauche
+
++ Modèle de Poisson
+
+```{r}
+# on fait un modèle de Poisson
+modele.prai.S.fauch <- glmmTMB(SPrai_sp ~ degre_fauche, 
+                      data = super_table_prai,
+                      #family = nbinom2)
+                      family = poisson)
+summary(modele.prai.S.fauch)
+```
+
+```{r}
+performance(modele.prai.S.fauch)
+```
+```{r}
+check_overdispersion(modele.prai.S.fauch)
+```
+
++ Modèle Negative binomial
+
+```{r}
+# on fait un modèle Negative binomial
+modele.prai.S.fauch.nb <- glm.nb(SPrai_sp ~ degre_fauche, 
+                      data = super_table_prai)
+summary(modele.prai.S.fauch.nb)
+```
+
+```{r}
+model_performance(modele.prai.S.fauch.nb)
+```
+
+```{r}
+check_overdispersion(modele.prai.S.fauch.nb)
+```
+```{r}
+library(car)
+Anova(modele.prai.S.fauch.nb)
+```
+```{r}
+emmeans(modele.prai.S.fauch.nb, list(pairwise ~ degre_fauche), 
+        adjust = "dunn",
+        pbkrtest.limit = 6000) 
+```
+3.Plusieurs Fauches significativement différent de tous les autres degrés. 
+
++ test Dunn sans modele
+
+```{r}
+dunnTest(SPrai_sp ~ degre_fauche,
+         data = super_table_prai)
+```
+## II.2. Modèle simple paturage
+
++ Modèle Negative binomial
+
+```{r}
+# on fait un modèle Negative binomial
+modele.prai.S.pat.nb <- glm.nb(SPrai_sp ~ transect_paturage_prairie, 
+                      data = super_table_prai)
+summary(modele.prai.S.pat.nb)
+```
+```{r}
+model_performance(modele.prai.S.pat.nb)
+check_overdispersion(modele.prai.S.pat.nb)
+```
+```{r}
+Anova(modele.prai.S.pat.nb)
+```
+Pas de significativité 
+
+## II.3. Modèle interaction fauche + fauche*paturage
+
+```{r}
+# on fait un modèle Negative binomial
+modele.prai.S.fauch.pat.nb <- glm.nb(SPrai_sp ~ degre_fauche + 
+                                 degre_fauche*transect_paturage_prairie, 
+                      data = super_table_prai)
+summary(modele.prai.S.fauch.pat.nb)
+```
+```{r}
+model_performance(modele.prai.S.fauch.pat.nb)
+check_overdispersion(modele.prai.S.fauch.pat.nb)
+```
+```{r}
+Anova(modele.prai.S.fauch.pat.nb, type = 3)
+```
+```{r}
+emmeans(modele.prai.S.fauch.pat.nb, list(pairwise ~ degre_fauche*transect_paturage_prairie), 
+        adjust = "dunn",
+        pbkrtest.limit = 6000) 
+```
+## II.4. Modèle simple semis/sursemis
+
+Attention ici, il faut enlever les "Je ne sais pas"
+
++ Modèle Negative binomial
+
+```{r}
+# on fait un modèle Negative binomial
+modele.prai.S.sem.nb <- glm.nb(SPrai_sp ~ semis_sursemis, 
+                      data = super_table_prai[super_table_prai$semis_sursemis != "Je ne sais pas",])
+summary(modele.prai.S.sem.nb)
+```
+```{r}
+model_performance(modele.prai.S.sem.nb)
+check_overdispersion(modele.prai.S.sem.nb)
+```
+```{r}
+Anova(modele.prai.S.sem.nb)
+```
+# III. Modèles plus complexes
+
+## III.1. Modèle complet sans effet aléatoire
+
+#### a) Modèle 1 : naïf, sans interaction
+
+```{r}
+# table avec semis_sursemis
+Data <- super_table_prai[super_table_prai$semis_sursemis != "Je ne sais pas",]
+#Data
+```
+
++ Poisson
+
+```{r}
+modele.prai.sseff.v1 <- glm(SPrai_sp ~ degre_fauche +
+                                transect_paturage_prairie +
+                                semis_sursemis +
+                                #degre_fauche*transect_paturage_prairie*semis_sursemis +
+                                classe_habitat +
+                                axe1_1000 +
+                                axe2_1000 +
+                                axe3_1000 +
+                                #axe4_1000 +
+                                axe1_5000 +
+                                axe2_5000 +
+                                axe3_5000 +
+                                axe1_10000 +
+                                axe2_10000 +
+                                axe3_10000, 
+                      family = poisson,
+                      data = Data)
+summary(modele.prai.sseff.v1)
+```
+
++ Performance
+
+```{r}
+model_performance(modele.prai.sseff.v1)
+check_overdispersion(modele.prai.sseff.v1)
+check_autocorrelation(modele.prai.sseff.v1)
+check_collinearity(modele.prai.sseff.v1)
+```
+
++ Utilisation de DHARma
+
+```{r}
+# Normalité et homogénétité des résidus?
+simulOutput.sseff.v1 <- simulateResiduals(modele.prai.sseff.v1)
+plot(simulOutput.sseff.v1)
+```
+```{r}
+#testSpatialAutocorrelation(simulOutput.sseff.v1, x = Data$long, y = Data$lat)
+sims_grouped <- recalculateResiduals(simulOutput.sseff.v1, group = unique(Data$id_transect))
+Data_grouped <- Data_grouped <- unique(Data[,c("long","lat")]) # 420 transects
+testSpatialAutocorrelation(sims_grouped, x = Data_grouped$lat, y = Data_grouped$long)
+```
+Test de Moran non significatif, on ne rejette pas l'hypothèse nulle. 
+Il n'existe pas d'autocorrélation spatiale [Mais peut-être risque d'erreur de type 2]
+
+
++ On fait une Anova quand même
+```{r}
+Anova(modele.prai.sseff.v1)
+```
+#### b) Modèle 1.1 : parcimonieux 
+
++ StepAIC
+
+```{r}
+stepAIC(modele.prai.sseff.v1)
+```
+
+```{r}
+modele.prai.1.sseff.v1.1 <- glm(SPrai_sp ~ degre_fauche + 
+                                  transect_paturage_prairie + 
+                                  semis_sursemis + 
+                                  classe_habitat + 
+                                  axe1_1000 + 
+                                  axe2_1000 + 
+                                  axe3_1000 + 
+                                  axe1_5000 + 
+                                  axe2_5000 + 
+                                  axe3_5000 + 
+                                  axe1_10000 + 
+                                  axe3_10000,
+                                  family = poisson,
+                                  data = Data)
+```
+
+
+```{r}
+# check_convergence(modele.prai.1.sseff.v1.1) marche pas pour les glm
+model_performance(modele.prai.1.sseff.v1.1)
+check_overdispersion(modele.prai.1.sseff.v1.1)
+check_autocorrelation(modele.prai.1.sseff.v1.1)
+check_collinearity(modele.prai.1.sseff.v1.1)
+```
+
+
+```{r}
+Anova(modele.prai.1.sseff.v1.1)
+```
+
+#### c) Modèle 2: compatible VIF (sans variables trop corrélées), avec interaction
+
++ On reprend le modèle avant AIC
+On enlève les variables fortement colinéaires
+
+```{r}
+modele.prai.sseff.v2 <- glm(SPrai_sp ~ degre_fauche +
+                                transect_paturage_prairie +
+                                semis_sursemis +
+                                degre_fauche*transect_paturage_prairie*semis_sursemis +
+                                #classe_habitat +
+                                axe1_1000 +
+                                axe2_1000 +
+                                axe3_1000 +
+                                #axe4_1000 +
+                                #axe1_5000 +
+                                #axe2_5000 +
+                                axe3_5000 +
+                                axe1_10000 +
+                                axe2_10000 +
+                                axe3_10000, 
+                      family = poisson,
+                      data = Data)
+summary(modele.prai.sseff.v2)
+```
+
++ Quelques checks
+
+```{r}
+# check_convergence(modele.prai.1.sseff.v2) marche pas pour les glm
+model_performance(modele.prai.sseff.v2)
+check_overdispersion(modele.prai.sseff.v2)
+check_autocorrelation(modele.prai.sseff.v2)
+check_collinearity(modele.prai.sseff.v2)
+```
+
++ Test DHARma
+```{r}
+simulOutput.sseff.v2 <- simulateResiduals(modele.prai.sseff.v2)
+plot(simulOutput.sseff.v2)
+```
++ Autocorrélation spatiale?
+
+```{r}
+sims_grouped.2 <- recalculateResiduals(simulOutput.sseff.v2, group = unique(Data$id_transect))
+Data_grouped <- Data_grouped <- unique(Data[,c("long","lat")]) # 420 transects
+testSpatialAutocorrelation(sims_grouped.2, x = Data_grouped$lat, y = Data_grouped$long)
+```
++ On rejette l'hypothèse nulle : grosse auto-corrélation spatiale! 
+Celle-ci peut-elle être corrigée par les effets aléatoires? [voir la suite]
+
+```{r}
+Anova(modele.prai.sseff.v2)
+```
+
+#### d) Modèle 2.1 parcimonieux
+
++ step AIC
+
+```{r}
+stepAIC(modele.prai.sseff.v2)
+```
+
+```{r}
+modele.prai.sseff.v2.1 <- glm(SPrai_sp ~ degre_fauche + 
+                                transect_paturage_prairie + 
+                                semis_sursemis + 
+                                axe1_1000 + 
+                                axe3_1000 + 
+                                #axe4_1000 + 
+                                axe3_5000 + 
+                                axe1_10000 + 
+                                axe2_10000 + 
+                                axe3_10000 + 
+                                degre_fauche:semis_sursemis,
+                              family = "poisson", 
+                              data = Data
+  
+)
+```
+
++ Nouvelles performances
+
+```{r}
+model_performance(modele.prai.sseff.v2.1)
+check_overdispersion(modele.prai.sseff.v2.1)
+check_autocorrelation(modele.prai.sseff.v2.1)
+check_collinearity(modele.prai.sseff.v2.1)
+```
++ DHARma
+
+```{r}
+simulOutput.sseff.v2.1 <- simulateResiduals(modele.prai.sseff.v2.1)
+plot(simulOutput.sseff.v2.1)
+```
+
++ Anova
+
+```{r}
+Anova(modele.prai.sseff.v2.1)
+```
+
+
+#### b') Modèle compatible VIF [travail précédent non valable]
+
+VIF impossible car trop de colinéarité entre les variables: On enlève les interactions sauf `degre_fauche*transect_paturage_prairie`
+
+```{r}
+modele.prai.2.sseff <- glm(SPrai_sp ~ degre_fauche +
+                                transect_paturage_prairie +
+                                semis_sursemis +
+                                degre_fauche*transect_paturage_prairie +
+                                #degre_fauche*semis_sursemis +
+                                #transect_paturage_prairie*semis_sursemis +
+                                #degre_fauche*transect_paturage_prairie*semis_sursemis +
+                                classe_habitat +
+                                axe1_1000 +
+                                axe2_1000 +
+                                axe3_1000 +
+                                #axe4_1000 +
+                                axe1_5000 +
+                                axe2_5000 +
+                                axe3_5000 +
+                                axe1_10000 +
+                                axe2_10000 +
+                                axe3_10000, 
+                      family = poisson,
+                      data = super_table_prai[super_table_prai$semis_sursemis != "Je ne sais pas",])
+model_performance(modele.prai.2.sseff)
+check_overdispersion(modele.prai.2.sseff)
+```
+```{r}
+vif(modele.prai.2.sseff, type = 'predictor')
+```
+ON enleve axe1_500, axe_2 5000 et classe_habitat
+
+#### c') Vif sur le modèle compatible [travail précédent non valable]
+
+```{r}
+modele.prai.2.sseff.vif <- glm(SPrai_sp ~ degre_fauche +
+                                transect_paturage_prairie +
+                                semis_sursemis +
+                                #classe_habitat +
+                                axe1_1000 +
+                                axe2_1000 +
+                                axe3_1000 +
+                                #axe_1_5000 +
+                                #axe2_5000 +
+                                axe3_5000 +
+                                axe1_10000 +
+                                axe2_10000 +
+                                axe3_10000, 
+                      family = poisson,
+                      data = super_table_prai[super_table_prai$semis_sursemis != "Je ne sais pas",])
+model_performance(modele.prai.2.sseff.vif)
+check_overdispersion(modele.prai.2.sseff.vif)
+```
+```{r}
+vif(modele.prai.2.sseff.vif)
+```
+#### d) stepAIC [[travail précédent non valable]]
+
+```{r}
+stepAIC(modele.prai.2.sseff.vif)
+```
+```{r}
+model.modele.prai.2.sseff.vif.aic <- glm(formula = SPrai_sp ~ degre_fauche + 
+                                           transect_paturage_prairie + 
+                                           semis_sursemis + 
+                                           axe1_1000 + 
+                                           axe3_1000 + 
+                                           axe3_5000 + 
+                                           axe1_10000 + 
+                                           axe2_10000 + 
+                                           axe3_10000, 
+                                         family = poisson, 
+                                         data = super_table_prai[super_table_prai$semis_sursemis != "Je ne sais pas", ])
+summary(model.modele.prai.2.sseff.vif.aic)
+model_performance(model.modele.prai.2.sseff.vif.aic)
+check_overdispersion(model.modele.prai.2.sseff.vif.aic)
+```
+
+```{r}
+Anova(model.modele.prai.2.sseff.vif.aic)
+```
+## III.2. Modèles complets avec effets aléatoires [corrigé le 11/06 ]
+
+On s'inspire des modèles précédents. 
+On enlève d'emblée les variables fortement corrélées axe1_5000, axe2_5000, classe_habitat
+
+#### a) Modèle complet mais épuré 
+
+```{r}
+modele.prai.aveff.v1 <- glmmTMB(SPrai_sp ~ degre_fauche +
+                                transect_paturage_prairie +
+                                semis_sursemis +
+                                degre_fauche*transect_paturage_prairie*semis_sursemis +
+                                #classe_habitat +
+                                axe1_1000 +
+                                axe2_1000 +
+                                axe3_1000 +
+                                #axe4_1000 +
+                                #axe1_5000 +
+                                #axe2_5000 +
+                                axe3_5000 +
+                                axe1_10000 +
+                                axe2_10000 +
+                                axe3_10000 +
+                                (1 | annee) +
+                                (1 | id_transect/site_id), 
+                      family = poisson,
+                      data = Data)
+summary(modele.prai.aveff.v1)
+```
+```{r}
+check_convergence(modele.prai.aveff.v1)
+model_performance(modele.prai.aveff.v1)
+check_overdispersion(modele.prai.aveff.v1)
+check_autocorrelation(modele.prai.aveff.v1)
+check_collinearity(modele.prai.aveff.v1)
+```
+
+
++ Test DHARma
+```{r}
+simulOutput.aveff.v1 <- simulateResiduals(modele.prai.aveff.v1)
+plot(simulOutput.aveff.v1)
+```
+
+```{r}
+#testSpatialAutocorrelation(simulOutput.sseff.v1, x = Data$long, y = Data$lat)
+sims_grouped.3 <- recalculateResiduals(simulOutput.aveff.v1, group = unique(Data$id_transect))
+Data_grouped <- Data_grouped <- unique(Data[,c("long","lat")]) # 420 transects
+testSpatialAutocorrelation(sims_grouped.3, x = Data_grouped$lat, y = Data_grouped$long)
+```
+
+```{r}
+Anova(modele.prai.aveff.v1)
+```
+
+
+```{r}
+#### b) Modèle parcimonieux 
+#stepAIC(modele.prai.aveff.v1)
+```
+
+#### b) Modèle en negative binomial : Ne converge pas!
+
+```{r}
+modele.prai.aveff.v2 <- glmmTMB(SPrai_sp ~ degre_fauche +
+                                transect_paturage_prairie +
+                                semis_sursemis +
+                                degre_fauche*transect_paturage_prairie*semis_sursemis +
+                                #classe_habitat +
+                                axe1_1000 +
+                                axe2_1000 +
+                                axe3_1000 +
+                                #axe4_1000 +
+                                #axe1_5000 +
+                                #axe2_5000 +
+                                axe3_5000 +
+                                axe1_10000 +
+                                axe2_10000 +
+                                axe3_10000 +
+                                (1 | annee) +
+                                (1 | id_transect/site_id), 
+                      family = nbinom2,
+                      data = Data)
+summary(modele.prai.aveff.v2)
+```
+
+
+
+#### b') Modèle sans interaction pour VIF
+
+```{r}
+modele.prai.2.aveff <- glmmTMB(SPrai_sp ~ degre_fauche +
+                                transect_paturage_prairie +
+                                semis_sursemis +
+                                #degre_fauche*transect_paturage_prairie*semis_sursemis +
+                                classe_habitat +
+                                axe1_1000 +
+                                axe2_1000 +
+                                axe3_1000 +
+                                axe1_5000 +
+                                axe2_5000 +
+                                axe3_5000 +
+                                axe1_10000 +
+                                axe2_10000 +
+                                axe3_10000 +
+                                (1 | site_id), 
+                      family = poisson,
+                      data = super_table_prai[super_table_prai$semis_sursemis != "Je ne sais pas",])
+summary(modele.prai.2.aveff)
+```
+
+```{r}
+check_collinearity(modele.prai.2.aveff)
+```
+
+#### c) Modele sans vif > 10
+
+```{r}
+modele.prai.2.aveff.vif <- glmmTMB(SPrai_sp ~ degre_fauche +
+                                transect_paturage_prairie +
+                                semis_sursemis +
+                                classe_habitat +
+                                axe1_1000 +
+                                axe2_1000 +
+                                axe3_1000 +
+                                axe1_5000 +
+                                axe3_5000 +
+                                axe1_10000 +
+                                axe2_10000 +
+                                axe3_10000 +
+                                (1 | site_id), 
+                      family = poisson,
+                      data = super_table_prai[super_table_prai$semis_sursemis != "Je ne sais pas",])
+model_performance(modele.prai.2.aveff.vif)
+check_overdispersion(modele.prai.2.aveff.vif)
+```
+
+```{r}
+stepAIC(modele.prai.2.aveff.vif)
+```
+Le stepAIC ne change rien, pas mal comme modèle. 
+
+
+
+On fait l'Anova 
+
+
+```{r}
+Anova(modele.prai.2.aveff.vif, type = 2)
+```
+
+#### d) Tentative de test d'autocorrélation spatiale 
+
+```{r}
+# library(DHARMa)
+# sims <- simulateResiduals(modele.prai.2.aveff.vif)
+# testSpatialAutocorrelation(sims, 
+#                            x = super_table_prai[super_table_prai$semis_sursemis != "Je ne sais pas",]$long, 
+#                            y = super_table_prai[super_table_prai$semis_sursemis != "Je ne sais pas",]$lat)
+```
+
+
+
+```{r}
+# Data <- super_table_prai[super_table_prai$semis_sursemis != "Je ne sais pas",]
+# 
+# sims_grouped <- recalculateResiduals(sims, group = Data$id_transect)
+# 
+# Data_grouped <- unique(Data[,c("lat","long")])
+# 
+# testSpatialAutocorrelation(sims_grouped, x = Data_grouped$lat, y = Data_grouped$long)
+```
+
+```{r}
+# length(sims)
+# Data_grouped
+```
+```{r}
+# sum(duplicated(Data_grouped))
+```
+420 coordonnées toutes différentes
+
+#### e) Tentative de vérification des hypothèses de validité d'un modèle
+
+```{r}
+residuals <- residuals(modele.prai.2.aveff.vif)
+plot(residuals)
+```
+
+```{r}
+# Obtenir les valeurs prédites
+predicted_values <- predict(modele.prai.2.aveff.vif)
+
+# Créer un data frame pour ggplot
+residuals_data <- data.frame(
+  predicted = predicted_values,
+  residuals = residuals
+)
+
+```
+
+```{r}
+# Tracer les résidus vs les valeurs prédites
+ggplot(residuals_data, aes(x = predicted, y = residuals)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "Résidus vs Valeurs Prédites", x = "Valeurs Prédites", y = "Résidus") +
+  theme_minimal()
+```
+
+```{r}
+# Tracer un histogramme des résidus
+ggplot(residuals_data, aes(x = residuals)) +
+  geom_histogram(aes(y = ..density..),binwidth = 0.5, fill = "blue", color = "black", alpha = 0.7) +
+  geom_density(color = "red", size = 1) +
+  labs(title = "Histogramme des Résidus", x = "Résidus", y = "Fréquence") +
+  theme_minimal() 
+```
+```{r}
+# Tracer un Q-Q plot des résidus
+qqnorm(residuals)
+qqline(residuals, col = "red")
+```
+
++ [edit 7 juin : Utilisation de DHARMa]
+
+```{r}
+simulOutput <- simulateResiduals(modele.prai.2.aveff.vif)
+plot(simulOutput)
+```
+
+Mais c'est super moche!!
+
+## III.3. Modèles sans semis_sursemis [le 7 juin]
+
+Cette fois-ci j'enlève le semis_sursemis, pour avoir plus de données .... pour la richesse c'est peut être important 
+
+
+
+```{r}
+modele.prai.aveff.v2 <- glmmTMB(SPrai_sp ~ degre_fauche +
+                                transect_paturage_prairie +
+                                #semis_sursemis +
+                                degre_fauche*transect_paturage_prairie +
+                                #classe_habitat +
+                                axe1_1000 +
+                                axe2_1000 +
+                                axe3_1000 +
+                                #axe4_1000 +
+                                #axe1_5000 +
+                                #axe2_5000 +
+                                axe3_5000 +
+                                axe1_10000 +
+                                axe2_10000 +
+                                axe3_10000 +
+                                (1 | annee) +
+                                (1 | id_transect/site_id), 
+                      family = poisson,
+                      data = super_table_prai)
+summary(modele.prai.aveff.v2)
+```
+
+```{r}
+check_convergence(modele.prai.aveff.v2)
+model_performance(modele.prai.aveff.v2)
+check_overdispersion(modele.prai.aveff.v2)
+check_autocorrelation(modele.prai.aveff.v2)
+check_collinearity(modele.prai.aveff.v2)
+```
+```{r}
+simulOutput.aveff.v2 <- simulateResiduals(modele.prai.aveff.v2)
+plot(simulOutput.aveff.v2)
+```
++ Autocorrélation spatiale?
+
+```{r}
+sims_grouped.4 <- recalculateResiduals(simulOutput.aveff.v2, group = unique(Data$id_transect))
+Data_grouped <- Data_grouped <- unique(Data[,c("long","lat")]) # 420 transects
+testSpatialAutocorrelation(sims_grouped.4, x = Data_grouped$lat, y = Data_grouped$long)
+```
+```{r}
+Anova(modele.prai.aveff.v2)
+```
+
+## III.4. Modèles comme pour les espèces AVEC semis_sursemis
+
+
+```{r}
+modele.S.prai.complet <- glmmTMB(SPrai_sp ~ degre_fauche +
+                                transect_paturage_prairie +
+                                semis_sursemis +
+                                classe_habitat +
+                                axe1_1000 +
+                                axe2_1000 +
+                                axe3_1000 +
+                                #axe4_1000 +
+                                axe3_5000 +
+                                axe1_10000 +
+                                axe2_10000 +
+                                axe3_10000 +
+                                (1 | site_id) +
+                                (1 | id_transect), 
+                      family = poisson,
+                      #data = super_table_prai)
+                      data = super_table_prai[super_table_prai$semis_sursemis != "Je ne sais pas",])
+summary(modele.S.prai.complet)
+```
+
+```{r}
+vif(glm(SPrai_sp ~ degre_fauche +
+                        transect_paturage_prairie +
+                        semis_sursemis +
+                        classe_habitat +
+                        axe1_1000 +
+                        axe2_1000 +
+                        axe3_1000 +
+                        #axe4_1000 +
+                        axe3_5000 +
+                        axe1_10000 +
+                        axe2_10000 +
+                        axe3_10000,
+                  family = poisson,
+                  super_table_prai[super_table_prai$semis_sursemis != "Je ne sais pas",]))
+```
+On enlève classe_habitat....
+
+```{r}
+modele.S.prai.complet.1 <- glmmTMB(SPrai_sp ~ degre_fauche +
+                                transect_paturage_prairie +
+                                semis_sursemis +
+                                #classe_habitat +
+                                axe1_1000 +
+                                axe2_1000 +
+                                axe3_1000 +
+                                #axe4_1000 +
+                                axe3_5000 +
+                                axe1_10000 +
+                                axe2_10000 +
+                                axe3_10000 +
+                                (1 | annee) +
+                                (1 | site_id) +
+                                (1 | id_transect), 
+                      family = poisson,
+                      #family = nbinom2,
+                      #data = super_table_prai)
+                      data = super_table_prai[super_table_prai$semis_sursemis != "Je ne sais pas",])
+summary(modele.S.prai.complet.1)
+```
+
+
+```{r}
+help('diagnose')
+```
+
++ Vérification des hypothèses
+
+
+```{r}
+simulOutput <- simulateResiduals(modele.S.prai.complet.1)
+plot(simulOutput)
+```
+
+```{r}
+check_overdispersion(modele.S.prai.complet.1)
+```
+
+## III.5. Modèles apres ACP_prairies 
+
+Dans ce modèle, je ne garde que les axes des ACP qui sont les moins corrélées [faisant suite à l'étude ACP_Prairies].
+
+**Attention** : 
+- Il faudrait que je regarde si on garde la variable semis_sursemis - qui nous fait enlever des prairies - si les axes que l'on a enlevé/gardé pour les ACP sont les mêmes que pour la totalité des prairies
+- J'enlève délibérément la variable `classe_habitat`. Je ne sais pas si elle est pertinente finalement, vu l'échelle....
+- Je crée un effet aléatoire (1 | site_id/id_transect. car un transect ne peut pas se retrouver sur plusieurs sites
+- Je mets une interaction : fauche_semis 
+
+
++ Modèle de Poisson
+
+```{r}
+modele.S.prai.11.06.v1 <- glmmTMB(SPrai_sp ~ degre_fauche +
+                                transect_paturage_prairie +
+                                semis_sursemis +
+                                #degre_fauche*semis_sursemis +
+                                #classe_habitat +
+                                axe1_1000 +
+                                axe2_1000 +
+                                axe3_1000 +
+                                #axe4_1000 +
+                                axe3_5000 +
+                                axe1_10000 +
+                                axe2_10000 +
+                                axe3_10000 +
+                                (1 | annee) +
+                                (1 | id_transect/site_id), 
+                      family = poisson,
+                      #family = nbinom2,
+                      #data = super_table_prai)
+                      data = super_table_prai[super_table_prai$semis_sursemis != "Je ne sais pas",])
+summary(modele.S.prai.11.06.v1)
+```
+
+```{r}
+simulOutput.v1 <- simulateResiduals(modele.S.prai.11.06.v1)
+plot(simulOutput.v1)
+```
+Ce n'est pas génial pour la validité du modèle. On fait comme si
+
+```{r}
+Anova(modele.S.prai.11.06.v1)
+```
+
+
+
++ On essaie en negative binomial. Pas de convergence tel quel
+On enlève les interactions. Pas de convergence non plus 
+On met plus de données (ie on enlève la variable semis/sursemis) et on garde l'interaction. Pas de convergence non plus
+
++ Je reviens en Poisson et ne mets que fauche+Paturage+interactions 
+```{r}
+modele.S.prai.11.06.v2 <- glmmTMB(SPrai_sp ~ degre_fauche +
+                                transect_paturage_prairie +
+                                #semis_sursemis +
+                                degre_fauche*transect_paturage_prairie +
+                                #degre_fauche*transect_paturage_prairie*semis_sursemis +
+                                #classe_habitat +
+                                axe1_1000 +
+                                axe2_1000 +
+                                axe3_1000 +
+                                #axe4_1000 +
+                                axe3_5000 +
+                                axe1_10000 +
+                                axe2_10000 +
+                                axe3_10000 +
+                                (1 | annee) +
+                                (1 | id_transect/site_id), 
+                      family = poisson,
+                      data = super_table_prai)
+                      #data = super_table_prai[super_table_prai$semis_sursemis != "Je ne sais pas",])
+summary(modele.S.prai.11.06.v2)
+```
+
+```{r}
+simulOutput.v2<- simulateResiduals(modele.S.prai.11.06.v2)
+plot(simulOutput.v2)
+```
+
+```{r}
+Anova(modele.S.prai.11.06.v2)
+```
+
+#IV. Edit 26/06 avec les 4 axes significatifs 
+
+Rappel de la table
+
+```{r}
+subset(super_table_prai, semis_sursemis != "Je ne sais pas")
+```
+### 1. Modèle complet avec semis
+
+```{r}
+# super table définie dans Prairie_modèle avec plein plein de belles choses
+#super_table_prai_semis_log
+```
+
+```{r}
+nrow(super_table_prai[super_table_prai$semis_sursemis != "Je ne sais pas" & super_table_prai$NPrai_sp !=0,])
+```
+
+#### Poisson
+
+```{r}
+modele.S.prai.0 <- glmmTMB(SPrai_sp ~ degre_fauche +
+                            transect_paturage_prairie +
+                            semis_sursemis +
+                            degre_fauche:transect_paturage_prairie +
+                            #degre_fauche:semis_sursemis +
+                            transect_paturage_prairie:semis_sursemis +
+                            axe1_1000 +
+                            axe2_1000 +
+                            #axe1_5000 +
+                            axe1_10000 +
+                            axe2_10000 +
+                            (1 | annee) +
+                            (1 | site_id/id_transect), 
+                            #(1 | site_departement/site_code_postal/site_id/id_transect), 
+                          family = poisson,
+                          data = super_table_prai_semis_log)
+                          #data = super_table_prai[super_table_prai$semis_sursemis != "Je ne sais pas",])
+
+summary(modele.S.prai.0)
+```
+
++ Vérification des conditions
+
+```{r}
+# DHARMa
+simul0 <- simulateResiduals(modele.S.prai.0)
+plot(simul0)
+testOutliers(simul0, type = 'bootstrap')
+
+# performance
+model_performance(modele.S.prai.0)
+check_overdispersion(modele.S.prai.0)
+check_heteroscedasticity(modele.S.prai.0)
+check_autocorrelation(modele.S.prai.0)
+check_collinearity(modele.S.prai.0)
+```
+```{r}
+# Autocorrélation spatiale?
+sims_grouped <- recalculateResiduals(simul0, group = unique(subset(super_table_prai, 
+                                          semis_sursemis != "Je ne sais pas")$id_transect))
+Data_grouped <- unique(subset(super_table_prai, 
+                                          semis_sursemis != "Je ne sais pas")[,c("long","lat")])
+testSpatialAutocorrelation(sims_grouped, x = Data_grouped$lat, y = Data_grouped$long)
+```
+```{r}
+Anova(modele.S.prai.0)
+```
+
+#### nbinom
+
+
+```{r}
+modele.S.prai.0.1 <- glmmTMB(SPrai_sp ~ degre_fauche +
+                            transect_paturage_prairie +
+                            semis_sursemis +
+                            degre_fauche:transect_paturage_prairie +
+                            degre_fauche:semis_sursemis +
+                            transect_paturage_prairie:semis_sursemis +
+                            axe1_1000 +
+                            axe2_1000 +
+                            #axe1_5000 +
+                            axe1_10000 +
+                            axe2_10000 +
+                            (1 | annee) +
+                            (1 | site_id/id_transect), 
+                          #family = poisson,
+                          family = nbinom2,
+                          #data = super_table_prai)
+                          data = super_table_prai[super_table_prai$semis_sursemis != "Je ne sais pas",])
+summary(modele.S.prai.0.1)
+```
+
++ Vérification des conditions
+
+```{r}
+# DHARMa
+simul0.1 <- simulateResiduals(modele.S.prai.0.1)
+plot(simul0.1)
+testOutliers(simul0.1, type = 'bootstrap')
+
+# performance
+model_performance(modele.S.prai.0.1)
+check_convergence(modele.S.prai.0.1)
+check_overdispersion(modele.S.prai.0.1)
+check_autocorrelation(modele.S.prai.0.1)
+check_collinearity(modele.S.prai.0.1)
+```
+```{r}
+# Autocorrélation spatiale?
+sims_grouped <- recalculateResiduals(simul0.1, group = unique(subset(super_table_prai, 
+                                          semis_sursemis != "Je ne sais pas")$id_transect))
+Data_grouped <- unique(subset(super_table_prai, 
+                                          semis_sursemis != "Je ne sais pas")[,c("long","lat")])
+testSpatialAutocorrelation(sims_grouped, x = Data_grouped$lat, y = Data_grouped$long)
+```
+```{r}
+Anova(modele.S.prai.0.1)
+```
+
+
+### 2. Modèle sans semis
+
+#### Poisson
+
+```{r}
+super_table_prai_ss0 <- subset(super_table_prai, NPrai_sp !=0)
+super_table_prai_ss0
+```
+```{r}
+summary(super_table_prai_ss0)
+```
+```{r}
+super_table_prai_ss0 |>
+  filter(is.na(axe1_1000))
+```
+
+
+```{r}
+modele.S.prai.1 <- glmmTMB(SPrai_sp ~ degre_fauche +
+                            transect_paturage_prairie +
+                            degre_fauche:transect_paturage_prairie +
+                            axe1_1000 +
+                            axe2_1000 +
+                            #axe1_5000 +
+                            axe1_10000 +
+                            axe2_10000 +
+                            (1 | annee) +
+                            (1 | site_id/id_transect), 
+                          family = poisson,
+                          #data = super_table_prai)
+                          data = super_table_prai_ss0)
+summary(modele.S.prai.1)
+```
++ Vérification des conditions
+
+```{r}
+# DHARMa
+simul1 <- simulateResiduals(modele.S.prai.1)
+
+#png("residus_SPrai.png", width = 800, height = 500)
+plot(simul1)
+#dev.off()
+
+#png("residus_SPrai_boot.png", width = 800, height = 500)
+testOutliers(simul1, type = 'bootstrap')
+#dev.off()
+
+# performance
+model_performance(modele.S.prai.1)
+check_convergence(modele.S.prai.1)
+check_overdispersion(modele.S.prai.1)
+check_autocorrelation(modele.S.prai.1)
+check_collinearity(modele.S.prai.1)
+```
+
+```{r}
+# Autocorrélation spatiale?
+sims_grouped <- recalculateResiduals(simul1, group = unique(super_table_prai$id_transect))
+Data_grouped <- unique(super_table_prai[,c("long","lat")])
+testSpatialAutocorrelation(sims_grouped, x = Data_grouped$lat, y = Data_grouped$long)
+```
+```{r}
+Anova(modele.S.prai.1)
+```
+```{r}
+library(xtable)
+xtable(Anova(modele.S.prai.1))
+```
+
++ Tendances 
+
+```{r}
+# prédiction
+# Charger les packages nécessaires
+
+# Créer un nouveau jeu de données pour la prédiction
+new_data <- expand.grid(degre_fauche = unique(table_non_nulle$degre_fauche),
+                        transect_paturage_prairie = unique(data_densite_sp$transect_paturage_prairie),
+                        #transect_paturage_prairie = "Non pâturée",
+                        axe1_1000 = mean(table_non_nulle$axe1_1000),
+                        axe2_1000 = mean(table_non_nulle$axe2_1000),
+                        #axe2_5000 = mean(table_non_nulle$axe2_5000),
+                        axe1_10000 = mean(table_non_nulle$axe1_10000),
+                        axe2_10000 = mean(table_non_nulle$axe2_10000))
+
+
+# Obtenir les prédictions avec intervalles de confiance sans effets aléatoires
+predictions <- predict(modele.S.prai.1, newdata = new_data, se.fit = TRUE, re.form = NA, type = "response")
+
+# Ajouter les prédictions et les intervalles de confiance dans le nouveau jeu de données
+new_data$fit <- predictions$fit
+new_data$se.fit <- predictions$se.fit
+
+# Calcul des intervalles de confiance
+new_data <- new_data %>%
+  mutate(lower = fit - 1.96 * se.fit,
+         upper = fit + 1.96 * se.fit)
+
+# Créer le graphique
+
+ggplot(subset(new_data, transect_paturage_prairie == "Non pâturée"),
+              aes(x = degre_fauche, y = fit, group = transect_paturage_prairie)) +
+  geom_line(aes(group = transect_paturage_prairie)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper, fill = transect_paturage_prairie), alpha = 0.2) +
+  labs(x = "Degré de fauche", y = "Densité prédite") +
+  theme_minimal() +
+  scale_x_discrete(drop = FALSE)  # Pour forcer l'affichage de tous les niveaux de degre_fauche
+
+ggplot(subset(new_data, transect_paturage_prairie == "Pâturée"),
+              aes(x = degre_fauche, y = fit, group = transect_paturage_prairie)) +
+  geom_line(aes(group = transect_paturage_prairie)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper, fill = transect_paturage_prairie), alpha = 0.2) +
+  labs(x = "Degré de fauche", y = "Richesse prédite") +
+  theme_minimal() +
+  scale_x_discrete(drop = FALSE)
+```
+
+
+#### nbinom
+
+```{r}
+modele.S.prai.1.1 <- glmmTMB(SPrai_sp ~ degre_fauche +
+                            transect_paturage_prairie +
+                            degre_fauche:transect_paturage_prairie +
+                            axe1_1000 +
+                            axe2_1000 +
+                            #axe1_5000 +
+                            axe1_10000 +
+                            axe2_10000 +
+                            (1 | annee) +
+                            (1 | site_id/id_transect), 
+                          family = nbinom2,
+                          #data = super_table_prai)
+                          data = super_table_prai)
+summary(modele.S.prai.1.1)
+```
+
+
++ Vérification des conditions
+
+```{r}
+# DHARMa
+simul1.1 <- simulateResiduals(modele.S.prai.1.1)
+plot(simul1.1)
+testOutliers(simul1.1, type = 'bootstrap')
+
+# performance
+model_performance(modele.S.prai.1.1)
+check_convergence(modele.S.prai.1.1)
+check_overdispersion(modele.S.prai.1.1)
+check_autocorrelation(modele.S.prai.1.1)
+check_collinearity(modele.S.prai.1.1)
+```
+
+```{r}
+# Autocorrélation spatiale?
+sims_grouped <- recalculateResiduals(simul1.1, group = unique(super_table_prai$id_transect))
+Data_grouped <- unique(super_table_prai[,c("long","lat")])
+testSpatialAutocorrelation(sims_grouped, x = Data_grouped$lat, y = Data_grouped$long)
+```
+```{r}
+Anova(modele.S.prai.1.1)
+```
+

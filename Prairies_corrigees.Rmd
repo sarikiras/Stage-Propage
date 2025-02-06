@@ -1,0 +1,971 @@
+---
+title: "Prairies corrigées"
+author: "Sariaka Ramialison"
+date: "2024-04-22"
+output: html_document
+---
+
+Dans ce document, je vais étudier les Prairies sur 15 ans. J'utilise uniquement les informations de la fiche Habitat.
+Il s'intitule "prairies corrigées" car il y a une correction des informations de Pâturage
+
+```{r}
+library(vegan)
+library(gridExtra)
+library(sf)
+library(lubridate)
+library(tidyverse)
+library(viridis)
+library(conflicted)
+```
+
+
+```{r}
+knitr::read_chunk("data_clean.Rmd")
+knitr::read_chunk("EDA_ind_taxo.Rmd")
+knitr::read_chunk("indic_taxo_env.Rmd")
+```
+
+```{r}
+conflicts_prefer(ggplot2::stat_qq_line)
+conflicts_prefer(dplyr::filter)
+conflicts_prefer(dplyr::select)
+conflicts_prefer(dplyr::mutate)
+conflicts_prefer(dplyr::arrange)
+```
+
+
+## I. Tables 
+
+
+### I.1 Table environnementale
+
+##### a. Table par relevé `df_env_prai_tot`
+
++ Je pars de la table avec l'environnement météo
+
+J'utilise la table `data_env_1_clean` du fichier `indic_taxo_env.Rmd`
+
+```{r}
+# Sélection des prairies dans la table de l'env meteo je joins les données avec la description de l'habitat
+# Rappel : `data_env_1_clean` est déja filtré pour +- t jours (t=15) 
+# En fait non c'était pas filtré... Pourquoi?
+df_env_met <- data_env_1_clean |> 
+  filter(transect_habitat == "Prairie") |>
+  dplyr::select(- transect_habitat)
+df_env_met
+```
+
++ Création de la table environnementale `df_env_prai_tot` par `id_releve`
+
+J'utilise la fonction `filtre_df_3_releves` qui se trouve dans `data_clean.Rmd`
+
+```{r}
+df_env_prai_tot <- df_env_met |>
+  inner_join(select(data, id_releve, id_transect, 29:30, 32:34, amendements, semis_sursemis, transect_coordonnees), by = "id_releve") |>
+  mutate(annee = year(releve_date)) |>
+  mutate(id_transect_annee = paste0(id_transect, '_', annee)) |>
+  relocate(id_releve, id_transect, id_transect_annee) |>
+  unique() |> 
+  mutate(transect_paturage_prairie = case_when( # modification des infos de paturage
+    (transect_paturage_prairie == "Pâturée" & id_releve %in% liste_anciens_releves) ~ "Non pâturée",
+    (transect_paturage_prairie == "Non pâturée" & id_releve %in% liste_anciens_releves) ~ "Pâturée",
+    TRUE ~ transect_paturage_prairie
+            )) %>%
+  filtre_df_3_releves(., 15) # filtre aux bonnes dates
+df_env_prai_tot
+```
+
+##### b. Table par transect `df_env_prai_tot` [objet spatial]
+
+```{r}
+# Regroupement par transect
+df_env_transects_prai_tot <- df_env_prai_tot |>
+  select(id_transect, 
+         annee, 
+         id_transect_annee, 
+         duree_obs, 
+         transect_coordonnees:transect_rythme_fauchage_prairie, 
+         amendements, 
+         semis_sursemis) |>
+  dplyr::group_by(id_transect_annee) |>
+  # on récupère les dernières données de gestion renseignées si données différentes sur une même annee
+  dplyr::summarise(last(across(4:9)), duree = sum(as.numeric(duree_obs))) |> 
+  unique() |>
+  na.omit()
+```
+
+
+
+
++ [edit 5 avril, ajout de longueur_transect][NE PAS OUVRIR]
+
+On aurait aussi pu joindre la table `data_longueur` de `curation_partVI.Rmd`
+
+```{r}
+df_env_transects_prai_tot$longueur_transect <- lapply(df_env_transects_prai_tot$transect_coordonnees,
+                                         function(x){st_length(st_geometry(st_read(x)))})
+df_env_transects_prai_tot <- df_env_transects_prai_tot |>
+  mutate (longueur_transect = as.numeric(longueur_transect))
+```
+
+
+### I.2 Projection des transects selectionnés
+
+
+```{r}
+df_env_transects_prai_tot$long <- sapply(df_env_transects_prai_tot$transect_coordonnees, long_moy)  # création de la colonne `long`
+df_env_transects_prai_tot$lat <- sapply(df_env_transects_prai_tot$transect_coordonnees, lat_moy)  # création de la colonne `lat`
+```
+
+```{r}
+# Transformation en objet spatial
+df_env_transects_prai_tot <- st_as_sf(df_env_transects_prai_tot, coords = c("long", "lat"), crs = 4326)
+df_env_transects_prai_tot <- st_set_crs(df_env_transects_prai_tot, 4326)
+```
+
+```{r}
+write.csv(df_env_transects_prai_tot,
+          "tables/df_env_prai.csv",
+          row.names = FALSE)
+```
+
+
+
+
+```{r}
+library(rnaturalearth)
+
+# Charger les données spatiales de la France
+france <- ne_countries(scale = "medium", country = "France", returnclass = "sf")
+
+# Créer une carte de la France avec ggplot2
+carte_france <- ggplot() +
+  # Ajouter les données de la carte de la France
+  geom_sf(data = france) +
+  # Personnaliser la carte
+  theme_minimal()
+
+# Superposer les points sur la carte de la France
+carte_points_france <- carte_france +
+  # Ajouter les données des points
+  geom_sf(data = df_env_transects_prai_tot, color = "red", size = 0.1) +
+  # Personnaliser la légende
+  labs(title = "Carte des 1046 transects prairie \nRelevés complets sur 15 ans",
+       caption = "Source: Vos données") +
+  # Optionnel : définir l'aspect ratio pour éviter la distorsion
+  coord_sf(xlim = c(-5, 10), ylim = c(41, 52), expand = FALSE)
+
+# Afficher la carte
+print(carte_points_france)
+
+# sauvegarder la carte
+# ggsave("carte_prai_15ans.png",
+#    carte_points_france, 
+#    width = 8, height = 6, units = "in")
+```
+
+
+```{r}
+# carte des relevés non nuls
+# Charger les données spatiales de la France
+france <- ne_countries(scale = "medium", country = "France", returnclass = "sf")
+
+# Créer une carte de la France avec ggplot2
+carte_france <- ggplot() +
+  # Ajouter les données de la carte de la France
+  geom_sf(data = france) +
+  # Personnaliser la carte
+  theme_minimal()
+
+# Superposer les points sur la carte de la France
+carte_points_france <- carte_france +
+  # Ajouter les données des points
+  geom_sf(data = df_env_transects_prai_tot, color = "red", size = 0.1) +
+  # Personnaliser la légende
+  labs(title = "Carte des 1046 transects prairie \nRelevés complets sur 15 ans",
+       caption = "Source: Vos données") +
+  # Optionnel : définir l'aspect ratio pour éviter la distorsion
+  coord_sf(xlim = c(-5, 10), ylim = c(41, 52), expand = FALSE)
+
+# Afficher la carte
+print(carte_points_france)
+
+# sauvegarder la carte
+ggsave("carte_prai_15ans.png",
+   carte_points_france, 
+   width = 8, height = 6, units = "in")
+
+```
+
+### I.3 Table des relevés par transect
+
+##### a. Relevés espèces et morpho-groupes `releves_prai_tot`
+
+J'utilise la table `data_releves_large` qui se trouve dans le fichier `EDA_ind_taxo.Rmd`
+
+```{r}
+data_releve_large_3_prai_tot <- data_releves_large |>
+  filter(id_releve %in% df_env_prai_tot$id_releve) |>
+  inner_join(select(df_env_prai_tot, id_releve, id_transect_annee), by ="id_releve") |>
+  select(-id_releve) |>
+  #select(-id_releve, -geometry) |>
+  group_by(id_transect_annee) |>
+  summarise_all(sum)
+data_releve_large_3_prai_tot
+```
+
++ Densité
+
+```{r}
+# transformation de la table de releves d'abondance en table de relevés de densités
+releves_prai_tot <- data_releve_large_3_prai_tot |>
+  inner_join(select(df_env_transects_prai_tot, id_transect_annee, longueur_transect), by ="id_transect_annee") |>
+  column_to_rownames("id_transect_annee") %>%
+  mutate_at(vars("Amaryllis":"Papillon indéterminé"), list(~ . /longueur_transect)) %>%
+  as.data.frame(.) %>%
+  mutate_all(~ . * 100) |>
+  select(-longueur_transect, -geometry)
+  #select(-longueur_transect)
+releves_prai_tot
+```
+*Remarque* : On passe de 1098 observations à 1046 observations car il y avait des `NA` dans les tables d'environnement
+
+##### b. Relevés espèces `releves_prai_tot_sp`
+
+```{r}
+# morpho_groupes plus restreint 
+morpho_groupes <- c("Cuivrés",
+                    "Fadets",
+                    "Fluorés et Colias jaunes",
+                    "Hespéries orangées",
+                    "Hespéries tachetées",
+                    "Lycènes bleus",
+                    "Marbrés",
+                    "Mégères et Némusiens",
+                    "Mélitées et Damiers",
+                    "Moirés",
+                    "Petits Nacrés",
+                    "Piérides blanches",                                      
+                    "Sylvains", 
+                    "Papillon indéterminé")   
+```
+
+Selection des especes 
+
+```{r}
+data_releve_large_3_prai_tot_sp <- data_releve_large_3_prai_tot |>
+  select(!all_of(morpho_groupes))
+colnames(data_releve_large_3_prai_tot_sp)
+```
++ Table des relevés des espèces (en abonb)
+
+```{r}
+# transformation de la table de releves en table de densité
+releves_prai_tot_sp_ab <- data_releve_large_3_prai_tot_sp |>
+  inner_join(select(df_env_transects_prai_tot, id_transect_annee, longueur_transect), by = "id_transect_annee") |>
+  column_to_rownames("id_transect_annee") %>%
+  as.data.frame(.) |>
+  select(-longueur_transect, -geometry)
+  #select(-longueur_transect)
+releves_prai_tot_sp_ab
+```
+
+```{r}
+write.csv(releves_prai_tot_sp_ab,
+          "tables/releves_prai_ab.csv", 
+          row.names = FALSE)
+```
+
++ Table des relevés des espèces (en densité)
+
+```{r}
+# transformation de la table de releves en table de densité
+releves_prai_tot_sp <- data_releve_large_3_prai_tot_sp |>
+  inner_join(select(df_env_transects_prai_tot, id_transect_annee, longueur_transect), by = "id_transect_annee") |>
+  column_to_rownames("id_transect_annee") %>%
+  mutate_at(vars("Amaryllis":"Vulcain"), list(~ . /longueur_transect)) %>% # Calcul de la densité * 100 
+  as.data.frame(.) |>
+  mutate_all(~ . * 100) |>
+  select(-longueur_transect, -geometry)
+  #select(-longueur_transect)
+releves_prai_tot_sp
+```
+```{r}
+write.csv(releves_prai_tot_sp,
+          "tables/releves_prai_d.csv", 
+          row.names = FALSE)
+```
+
+
+
+
+### I.4 Table des indices de biodiversité taxonomique 
+
+##### a. Table pour espèces et morpho_groupes 
+
+ + Utilisation de vegan pour calculer les indices de diversité taxonomiques
+
+```{r}
+# Calcul des indices 
+NPrai_t <- rowSums(releves_prai_tot)
+SPrai_t <- specnumber(releves_prai_tot)
+simpPrai_t <- diversity(releves_prai_tot, "simpson") 
+HPrai_t <- diversity(releves_prai_tot)
+JPrai_t <- HPrai_t/log(SPrai_t)
+
+div_tax_tot <- cbind(releves_prai_tot, 
+                     HPrai_t, simpPrai_t, SPrai_t, JPrai_t, NPrai_t) |>
+  select(-Amaryllis:-`Papillon indéterminé`) |>
+  rownames_to_column("id_transect_annee")
+div_tax_tot
+```
+
+
+##### b. Table pour espèces
+
+
+```{r}
+# Calcul des indices 
+NPrai_sp <- rowSums(releves_prai_tot_sp)
+NPrai_sp_ab <- rowSums(releves_prai_tot_sp_ab)
+SPrai_sp <- specnumber(releves_prai_tot_sp)
+simpPrai_sp <- diversity(releves_prai_tot_sp, "simpson") 
+HPrai_sp <- diversity(releves_prai_tot_sp)
+JPrai_sp <- HPrai_sp/log(SPrai_sp)
+div_tax_tot_sp <- cbind(releves_prai_tot_sp, 
+                        HPrai_sp, simpPrai_sp, SPrai_sp, JPrai_sp, NPrai_sp, NPrai_sp_ab) |>
+  select(-Amaryllis:-`Vulcain`) |>
+  rownames_to_column("id_transect_annee")
+  
+div_tax_tot_sp
+```
+
+### I.5. Supers tables environnement/indices de diversité
+
+`super_div_prai_tot_d` pour les espèces et morphogroupes
+`super_div_prai_tot_sp_d` pour les espèces
+
+
+```{r}
+super_div_prai_tot_d <- df_env_transects_prai_tot |>
+  inner_join(div_tax_tot, by ='id_transect_annee') 
+super_div_prai_tot_d
+```
++ Pour les espèces
+
+```{r}
+super_div_prai_tot_sp_d <- df_env_transects_prai_tot |>
+  inner_join(div_tax_tot_sp, by ='id_transect_annee') 
+super_div_prai_tot_sp_d
+```
+```{r}
+write.csv(super_div_prai_tot_sp_d,
+          "/Users/sariakasalomon-ramialison/Stage_Propage_R /Tables/super_div_tax_prai.csv")
+```
+
+
+```{r}
+# carte des relevés non nuls
+# Charger les données spatiales de la France
+france <- ne_countries(scale = "medium", country = "France", returnclass = "sf")
+
+# Créer une carte de la France avec ggplot2
+carte_france <- ggplot() +
+  # Ajouter les données de la carte de la France
+  geom_sf(data = france) +
+  # Personnaliser la carte
+  theme_minimal()
+
+# Superposer les points sur la carte de la France
+carte_points_france <- carte_france +
+  # Ajouter les données des points
+  geom_sf(data = subset(super_div_prai_tot_sp_d, NPrai_sp!=0), color = "red", size = 0.1) +
+  # Personnaliser la légende
+  labs(title = paste("Carte des", nrow(subset(super_div_prai_tot_sp_d, NPrai_sp!=0)), "transects prairie \nRelevés complets sur 15 ans"),
+       caption = "Source: Vos données") +
+  # Optionnel : définir l'aspect ratio pour éviter la distorsion
+  coord_sf(xlim = c(-5, 10), ylim = c(41, 52), expand = FALSE)
+
+# Afficher la carte
+print(carte_points_france)
+
+# sauvegarder la carte
+ggsave("carte_prai_15ans.png",
+   carte_points_france, 
+   width = 8, height = 6, units = "in")
+
+```
+
+
+## II. Distribution des indices de diversité taxonomiques  
+
+
+##### a. Densité 
+
++ Plots
+
+```{r}
+plot1 <- super_div_prai_tot_d |>
+  ggplot(aes(x = NPrai_t)) +
+    geom_histogram(fill = viridis(1)) +
+    scale_fill_viridis_d() +
+    labs(x= "Densité", y = "Fréquence") +
+    theme_minimal()
+
+plot2 <- super_div_prai_tot_d |>
+  ggplot(aes(x = NPrai_t)) +
+    geom_boxplot() +
+    theme_minimal() +
+    labs(title = paste("Répartition de la densité \nEspèces et morpho-groupes \nNb transects =",
+                       nrow(super_div_prai_tot_d)),
+                       
+         x="") +
+    theme_minimal()
+
+plot3 <- super_div_prai_tot_sp_d |>
+  ggplot(aes(x = NPrai_sp)) +
+    geom_histogram(fill = viridis(1)) +
+    scale_fill_viridis_d() +
+    labs(x= "Densité", y = "Fréquence") +
+    theme_minimal()
+
+plot4 <- super_div_prai_tot_sp_d |>
+  ggplot(aes(x = NPrai_sp)) +
+    geom_boxplot() +
+    theme_minimal() +
+    labs(title = paste("Répartition de la densité \nEspèces  \nNb transects =",
+                       nrow(super_div_prai_tot_sp_d)),
+         x="") +
+    theme_minimal()
+
+grid.arrange(plot2, plot4, plot1, plot3, nrow = 2, ncol = 2, heights = c(1, 2))
+```
+Mmmh... tout cela semble log-normal
+```{r}
+plot3 <- super_div_prai_tot_sp_d |>
+  filter(NPrai_sp !=0) |>
+  ggplot(aes(x = NPrai_sp)) +
+    geom_histogram(fill = viridis(1)) +
+    scale_fill_viridis_d() +
+    labs(x= "Densité", y = "Fréquence") +
+    theme_minimal()
+
+plot4 <- super_div_prai_tot_sp_d |>
+  filter(NPrai_sp !=0) |>
+  ggplot(aes(x = NPrai_sp)) +
+    geom_boxplot() +
+    theme_minimal() +
+    labs(title = paste("Répartition de la densité sur les",
+                       nrow(subset(super_div_prai_tot_sp_d, NPrai_sp !=0)), "prairies"),
+         x="") +
+    theme_minimal()
+png("NPrai_hist.png")
+grid.arrange(plot4, plot3, nrow = 2, ncol = 1, heights = c(1, 2))
+dev.off()
+```
+
+
+
+```{r}
+# Regardons les qqplots des log(N+1)
+library(qqplotr)
+
+plot1 <- super_div_prai_tot_d |>
+  ggplot(aes(sample = log(NPrai_t +1))) +
+    stat_qq_band(bandType = "boot", alpha = 0.5) +
+    stat_qq_line() +
+    stat_qq_point() +
+    scale_fill_viridis_d() +
+    labs(x = "", y = "", 
+         title = paste("LOG - Abondance relative \nEspèces et morpho-groupes \nNb transects =",
+                       nrow(super_div_prai_tot_d))) +
+    theme_minimal()
+
+plot2 <- super_div_prai_tot_sp_d |>
+  ggplot(aes(sample = log(NPrai_sp + 1))) +
+    stat_qq_band(bandType = "boot", alpha = 0.5) +
+    stat_qq_line() +
+    stat_qq_point() +
+    scale_fill_viridis_d() +
+    labs(x = "", y = "", title = paste("LOG - Abondance relative \nEspèces  \nNb transects =",
+                                       nrow(super_div_prai_tot_sp_d))) +
+    theme_minimal()
+
+grid.arrange(plot1, plot2, nrow = 1, ncol = 2)
+```
+
+
++  Shapiro?
+
+```{r}
+shapiro.test(log(super_div_prai_tot_d$NPrai_t+1))
+shapiro.test(log(super_div_prai_tot_sp_d$NPrai_sp+1))
+```
+Pour les ensembles des espèces et morphogroupes, on est effectivement sur du log-normal.
+Pour les espèces, regarder les zero-inflated models?
+
++ Rajout des colonnes log
+
+
+```{r}
+super_div_prai_tot_d$log_NPrai_t <- log(super_div_prai_tot_d$NPrai_t + 1)
+super_div_prai_tot_sp_d$log_NPrai_sp <- log(super_div_prai_tot_sp_d$NPrai_sp + 1)
+```
+
+##### b. Shannon
+
+L'indice de diversité de Shannon se calcule pour les abondances non nulles. 
+[l'indice de Shannon mesure la diversité de l'échantillon] 
+
+Remarque : On peut egelement calculer l'indice de Shannon quand l'abondance est nulle! elle vaut zéro car c'est une somme sur un ensemble vide. 
+
+```{r}
+plot1 <- super_div_prai_tot_d |>
+  filter(NPrai_t !=0) |>
+  ggplot(aes(x = HPrai_t)) +
+    geom_histogram(fill = "skyblue") +
+    scale_fill_viridis_d() +
+    labs(x= "Indice de Shannon", y = "Effectif") +
+    theme_minimal()
+
+plot2 <- super_div_prai_tot_d |>
+  filter(NPrai_t !=0) |>
+  ggplot(aes(x = HPrai_t)) +
+    geom_boxplot() +
+    theme_minimal() +
+    labs(title = paste("Répartition de l'indice de Shannon \nEspèces et morpho-groupes \nNb transects =",
+                       nrow(super_div_prai_tot_d[super_div_prai_tot_d$NPrai_t !=0,])),
+                       x="") +
+    theme_minimal()
+
+plot3 <- super_div_prai_tot_sp_d |>
+  filter(NPrai_sp !=0) |>
+  ggplot(aes(x = HPrai_sp)) +
+    geom_histogram(fill = "skyblue") +
+    scale_fill_viridis_d() +
+    labs(x= "Indice de Shannon", y = "Effectif") +
+    theme_minimal()
+
+plot4 <- super_div_prai_tot_sp_d |>
+  filter(NPrai_sp !=0) |>
+  ggplot(aes(x = HPrai_sp)) +
+    geom_boxplot() +
+    theme_minimal() +
+    labs(title = paste("Répartition de l'indice de Shannon \nEspèces \nNb transects =",
+                       nrow(super_div_prai_tot_sp_d[super_div_prai_tot_sp_d$NPrai_sp !=0,])),
+         x="") +
+    theme_minimal()
+
+grid.arrange(plot2, plot4, plot1, plot3, nrow = 2, ncol = 2, heights = c(1, 2))
+```
+La répartition des indices de Shannon parait normale.... si on enlève les zéros
+
+```{r}
+# Regardons les qqplots : on rappelle que l'indice de Shannon n'a de sens que pour les indices d'abondance non nulle
+
+library(qqplotr)
+
+plot1 <- super_div_prai_tot_d |>
+  filter(NPrai_t !=0) |>
+  ggplot(aes(sample = HPrai_t)) +
+    stat_qq_band(bandType = "boot", alpha = 0.5) +
+    stat_qq_line() +
+    stat_qq_point() +
+    scale_fill_viridis_d() +
+    labs(x = "", 
+         y = "", 
+         title = paste("Shannon  \nEspèces et morphogroupes \nDensités non nulles",
+         nrow(super_div_prai_tot_d[super_div_prai_tot_d$NPrai_t !=0, ])))+
+    theme_minimal() +
+    theme(plot.title = element_text(size = 11)) 
+
+plot2 <- super_div_prai_tot_sp_d |>
+  filter(NPrai_sp !=0) |>
+  ggplot(aes(sample = HPrai_sp)) +
+    stat_qq_band(bandType = "boot", alpha = 0.5) +
+    stat_qq_line() +
+    stat_qq_point() +
+    scale_fill_viridis_d() +
+    labs(x = "", 
+         y = "", 
+         title = paste("Shannon  \nEspèces \nDensités non nulles",
+                       nrow(super_div_prai_tot_sp_d[super_div_prai_tot_sp_d$NPrai_sp !=0,]))) +
+    theme_minimal()+
+    theme(plot.title = element_text(size = 11))
+
+grid.arrange(plot1, plot2, nrow = 1, ncol = 2)
+```
+```{r}
+# Regardons les qqplots pour les indices de Shannon non nuls
+library(qqplotr)
+
+plot1 <- super_div_prai_tot_d |>
+  filter(HPrai_t !=0) |>
+  ggplot(aes(sample = HPrai_t)) +
+    stat_qq_band(bandType = "boot", alpha = 0.5) +
+    stat_qq_line() +
+    stat_qq_point() +
+    scale_fill_viridis_d() +
+    labs(x = "", 
+         y = "", 
+         title = paste("Shannon pour les densités \nEspèces et morphogroupes \nIndices de Shannon non nul :",
+                       nrow(super_div_prai_tot_d[super_div_prai_tot_d$HPrai_t !=0,]))) +
+    theme_minimal() +
+    theme(plot.title = element_text(size = 11))
+
+plot2 <- super_div_prai_tot_sp_d |>
+  filter(HPrai_sp !=0) |>
+  ggplot(aes(sample = HPrai_sp)) +
+    stat_qq_band(bandType = "boot", alpha = 0.5) +
+    stat_qq_line() +
+    stat_qq_point() +
+    scale_fill_viridis_d() +
+    labs(x = "", y = "", title = paste("Shannon pour les densités  \nEspèces  \nIndices de Shannon non nul :",
+                                       nrow(super_div_prai_tot_sp_d[super_div_prai_tot_sp_d$HPrai_sp !=0,]))) +
+    theme_minimal() +
+    theme(plot.title = element_text(size = 11))
+
+grid.arrange(plot1, plot2, nrow = 1, ncol = 2)
+```
+
+On a une normalité si on enlève les indices non nuls : c'est à dire ceux dont la richesse S = 1 (une seule espèce dominante)
+
+Remarque: 
+1. Dans la table initiale des espèces et morphogroupes on a effet 51 indices de Shannon nuls dont:
+- 10 indices d'abondance nulle (il reste 1035 données)
+- 41 indices d'abondance non nulle mais de richesse spécifique 1 (il reste 994 données sur le magnifique qq-plot)
+2. ans la table initiale des espèces on a effet 51 indices de Shannon nuls dont:
+- 10 indices d'abondance nulle (il reste 1035 données)
+- 41 indices d'abondance non nulle mais de richesse spécifique 1 (il reste 994 données sur le magnifique qq-plot)
+
+
+##### c. Richesse et équitabilité Pielou
+
+
+L'équitabilité de Pielou est égale à $H'/H_{max}$ où $H_{max} = - \log(S)$ , donc S doit être plus grand que 1. 
+
+```{r}
+plot1 <- super_div_prai_tot_d |>
+  ggplot(aes(x = SPrai_t)) +
+    geom_bar(fill = "skyblue") +
+    scale_fill_viridis_d() +
+    labs(x= "Richesse spécifique", y = "Effectif") +
+    theme_minimal()
+
+plot2 <- super_div_prai_tot_d |>
+  ggplot(aes(x = SPrai_t)) +
+    geom_boxplot() +
+    theme_minimal() +
+    labs(title = "Répartition de la richesse \nEspèces et morpho-groupes", x="") +
+    theme_minimal()
+
+plot3 <- super_div_prai_tot_sp_d |>
+  ggplot(aes(x = SPrai_sp)) +
+    geom_bar(fill = "skyblue") +
+    scale_fill_viridis_d() +
+    labs(x= "Richesse spécifique - Espèces", y = "Effectif") +
+    theme_minimal()
+
+plot4 <- super_div_prai_tot_sp_d |>
+  ggplot(aes(x = SPrai_sp)) +
+    geom_boxplot() +
+    theme_minimal() +
+    labs(title = "Répartition de la richesse \nEspèces", x="") +
+    theme_minimal()
+
+plot5 <- super_div_prai_tot_d |>
+  filter(NPrai_t !=0) |>
+  ggplot(aes(x = JPrai_t)) +
+    geom_histogram(fill = "skyblue") +
+    labs(x= "Equitabilité de Pielou", y = "Effectif") +
+    theme_minimal()
+
+plot6 <- super_div_prai_tot_sp_d |>
+  filter(NPrai_sp !=0) |>
+  ggplot(aes(x = JPrai_sp)) +
+    geom_histogram(fill = "skyblue") +
+    theme_minimal() +
+    labs(x= "Equitabilité de Pielou - Espèces", y = "Effectif") +
+    theme_minimal()
+
+
+grid.arrange(plot2, plot4, plot1, plot3, plot5, plot6, nrow = 3, ncol = 2, heights = c(2, 2, 2))
+```
+
+
+##### d. Simpson
+
+
+```{r}
+plot1 <- super_div_prai_tot_d |>
+  filter(SPrai_t > 1) |>
+  ggplot(aes(x = simpPrai_t)) +
+    geom_histogram(fill = "skyblue") +
+    scale_fill_viridis_d() +
+    labs(x= "Indice de Simpson", y = "Effectif") +
+    theme_minimal()
+
+plot2 <- super_div_prai_tot_d |>
+  filter(SPrai_t > 1) |>
+  ggplot(aes(x = HPrai_t)) +
+    geom_boxplot() +
+    theme_minimal() +
+    labs(title = paste("Répartition de l'indice de Simpson \nEspèces et morpho-groupes \nNb transects =",
+                       nrow(super_div_prai_tot_d[super_div_prai_tot_d$SPrai_t > 1,]),
+                       x="")) +
+    theme_minimal() +
+    theme(plot.title = element_text(size = 11))
+
+plot3 <- super_div_prai_tot_sp_d |>
+  filter(SPrai_sp > 1) |>
+  ggplot(aes(x = simpPrai_sp)) +
+    geom_histogram(fill = "skyblue") +
+    scale_fill_viridis_d() +
+    labs(x= "Indice de Simpson", y = "Effectif") +
+    theme_minimal()
+
+plot4 <- super_div_prai_tot_sp_d |>
+  filter(SPrai_sp > 1) |>
+  ggplot(aes(x = HPrai_sp)) +
+    geom_boxplot() +
+    theme_minimal() +
+    labs(title = paste("Répartition de l'indice de Simpson \nEspèces \nNb transects =",
+                       nrow(super_div_prai_tot_sp_d[super_div_prai_tot_sp_d$SPrai_sp > 1,]))
+         , x="") +
+    theme_minimal()+
+    theme(plot.title = element_text(size = 11))
+
+grid.arrange(plot2, plot4, plot1, plot3, nrow = 2, ncol = 2, heights = c(1, 2))
+```
+
+## III. Distribution des indices de diversité taxonomiques. Espèces. Exclusion relevés nuls.
+
+
+##### a. Densité 
+
++ Plots
+
+```{r}
+plot3 <- super_div_prai_tot_sp_d |>
+  filter(NPrai_sp !=0) |>
+  ggplot(aes(x = NPrai_sp)) +
+    geom_histogram(fill = viridis(1)) +
+    scale_fill_viridis_d() +
+    labs(x= "Densité", y = "Fréquence") +
+    theme_minimal()
+
+plot4 <- super_div_prai_tot_sp_d |>
+  ggplot(aes(x = NPrai_sp)) +
+    geom_boxplot() +
+    theme_minimal() +
+    labs(title = paste("Répartition de la densité (non nulle) \nEspèces  \nNb transects =",
+                       nrow(subset(super_div_prai_tot_sp_d,NPrai_sp !=0))),
+         x="") +
+    theme_minimal()
+
+grid.arrange(plot4,  plot3, nrow = 2, ncol = 1)
+```
+Mmmh... tout cela semble log-normal
+
+
+```{r}
+# Création de la colonne logNPrai_sp
+super_div_prai_tot_sp_d <- super_div_prai_tot_sp_d |>
+  mutate(logNPrai_sp = log(NPrai_sp))
+```
+
+
+```{r}
+# Regardons les qqplots des log(NPrai_sp)
+library(qqplotr)
+
+plot1 <- super_div_prai_tot_sp_d |>
+  filter(NPrai_sp !=0) |>
+  ggplot(aes(sample = logNPrai_sp)) +
+    stat_qq_band(bandType = "boot", alpha = 0.5) +
+    qqplotr::stat_qq_line() +
+    stat_qq_point() +
+    scale_fill_viridis_d() +
+    labs(x = "", y = "", 
+         title = paste("LOG - Abondance relative \nEspècess \nNb transects =",
+                       nrow(subset(super_div_prai_tot_sp_d, NPrai_sp !=0)))) +
+    theme_minimal()
+
+grid.arrange(plot1,nrow = 1, ncol = 1)
+```
+
+
++  Shapiro?
+
+```{r}
+shapiro.test(subset(super_div_prai_tot_sp_d, NPrai_sp !=0)$logNPrai_sp)
+```
+Pas de normalité sur le papier 
+
+##### b. Shannon
+
+L'indice de diversité de Shannon se calcule pour les abondances non nulles. 
+[l'indice de Shannon mesure la diversité de l'échantillon] 
+
+Remarque : On peut egelement calculer l'indice de Shannon quand l'abondance est nulle! elle vaut zéro car c'est une somme sur un ensemble vide. 
+
+```{r}
+
+plot3 <- super_div_prai_tot_sp_d |>
+  filter(NPrai_sp !=0) |>
+  ggplot(aes(x = HPrai_sp)) +
+    geom_histogram(fill = viridis(1)) +
+    scale_fill_viridis_d() +
+    labs(x= "Indice de Shannon", y = "Effectif") +
+    theme_minimal()
+
+plot4 <- super_div_prai_tot_sp_d |>
+  filter(NPrai_sp !=0) |>
+  ggplot(aes(x = HPrai_sp)) +
+    geom_boxplot() +
+    theme_minimal() +
+    labs(title = paste("Répartition de l'indice de Shannon",
+                       nrow(super_div_prai_tot_sp_d[super_div_prai_tot_sp_d$NPrai_sp !=0,])),
+         x="") +
+    theme_minimal()
+png("HPrai_hist.png")
+grid.arrange( plot4, plot3, nrow = 2, ncol = 1, heights = c(1, 2))
+dev.off()
+```
+La répartition des indices de Shannon parait normale.... si on enlève les zéros
+
+```{r}
+# Regardons les qqplots : on rappelle que l'indice de Shannon n'a de sens que pour les indices d'abondance non nulle
+
+library(qqplotr)
+
+
+plot2 <- super_div_prai_tot_sp_d |>
+  filter(NPrai_sp !=0) |>
+  ggplot(aes(sample = HPrai_sp)) +
+    stat_qq_band(bandType = "boot", alpha = 0.5) +
+    qqplotr::stat_qq_line() +
+    stat_qq_point() +
+    scale_fill_viridis_d() +
+    labs(x = "", 
+         y = "", 
+         title = paste("Shannon  \nEspèces \nDensités non nulles",
+                       nrow(super_div_prai_tot_sp_d[super_div_prai_tot_sp_d$NPrai_sp !=0,]))) +
+    theme_minimal()+
+    theme(plot.title = element_text(size = 11))
+
+grid.arrange( plot2, nrow = 1, ncol = 1)
+```
+```{r}
+# Regardons les qqplots pour les indices de Shannon non nuls
+library(qqplotr)
+
+
+plot2 <- super_div_prai_tot_sp_d |>
+  filter(HPrai_sp !=0) |>
+  ggplot(aes(sample = HPrai_sp)) +
+    stat_qq_band(bandType = "boot", alpha = 0.5) +
+    qqplotr::stat_qq_line() +
+    stat_qq_point() +
+    scale_fill_viridis_d() +
+    labs(x = "", y = "", title = paste("Shannon pour les densités  \nEspèces  \nIndices de Shannon non nul :",
+                                       nrow(super_div_prai_tot_sp_d[super_div_prai_tot_sp_d$HPrai_sp !=0,]))) +
+    theme_minimal() +
+    theme(plot.title = element_text(size = 11))
+
+grid.arrange(plot2, nrow = 1, ncol = 1)
+```
+
+On a une normalité si on enlève les indices non nuls : c'est à dire ceux dont la richesse S = 1 (une seule espèce dominante)
+
+Remarque: 
+
+164 valeurs avec d'abondance non nulle mais de richesse spécifique 1 (il reste 793 données sur le magnifique qq-plot)
+
+
+##### c. Richesse et équitabilité Pielou
+
+
+L'équitabilité de Pielou est égale à $H'/H_{max}$ où $H_{max} = - \log(S)$ , donc S doit être plus grand que 1. 
+
+```{r}
+plot3 <- super_div_prai_tot_sp_d |>
+  filter(NPrai_sp != 0) |>
+  ggplot(aes(x = SPrai_sp)) +
+    geom_bar(fill = "skyblue") +
+    scale_fill_viridis_d() +
+    labs(x= "Richesse spécifique - Espèces", y = "Effectif") +
+    theme_minimal()
+
+plot4 <- super_div_prai_tot_sp_d |>
+  filter(NPrai_sp != 0) |>
+  ggplot(aes(x = SPrai_sp)) +
+    geom_boxplot() +
+    theme_minimal() +
+    labs(title =  paste("Répartition de la richesse spécifique \nEspèces \nNb transects =",
+                       nrow(super_div_prai_tot_sp_d[super_div_prai_tot_sp_d$SPrai_sp >=1 ,]))
+         , x="") +
+    theme_minimal()
+
+plot6 <- super_div_prai_tot_sp_d |>
+  filter(NPrai_sp !=0) |>
+  ggplot(aes(x = JPrai_sp)) +
+    geom_histogram(fill = "skyblue") +
+    theme_minimal() +
+    labs(x= "Equitabilité de Pielou - Espèces", y = "Effectif") +
+    theme_minimal()
+
+
+grid.arrange( plot4, plot6, plot3, nrow = 2, ncol = 2)
+```
+
+```{r}
+plot3 <- super_div_prai_tot_sp_d |>
+  filter(NPrai_sp != 0) |>
+  ggplot(aes(x = SPrai_sp)) +
+    geom_bar(fill = viridis(1)) +
+    scale_fill_viridis_d() +
+    labs(x= "Richesse spécifique - Espèces", y = "Effectif") +
+    theme_minimal()
+
+plot4 <- super_div_prai_tot_sp_d |>
+  filter(NPrai_sp != 0) |>
+  ggplot(aes(x = SPrai_sp)) +
+    geom_boxplot() +
+    theme_minimal() +
+    labs(title =  paste("Répartition de la richesse spécifique.",
+                       nrow(super_div_prai_tot_sp_d[super_div_prai_tot_sp_d$SPrai_sp >=1 ,]))
+         , x="") +
+    theme_minimal()
+
+png("SPrai_hist.png")
+grid.arrange( plot4, plot3, nrow = 2, ncol = 1,  heights = c(1, 2))
+dev.off()
+```
+
+##### d. Simpson
+
+```{r}
+
+plot3 <- super_div_prai_tot_sp_d |>
+  filter(SPrai_sp > 1) |>
+  ggplot(aes(x = simpPrai_sp)) +
+    geom_histogram(fill = "skyblue") +
+    scale_fill_viridis_d() +
+    labs(x= "Indice de Simpson", y = "Effectif") +
+    theme_minimal()
+
+plot4 <- super_div_prai_tot_sp_d |>
+  filter(SPrai_sp > 1) |>
+  ggplot(aes(x = HPrai_sp)) +
+    geom_boxplot() +
+    theme_minimal() +
+    labs(title = paste("Répartition de l'indice de Simpson \nEspèces \nNb transects =",
+                       nrow(super_div_prai_tot_sp_d[super_div_prai_tot_sp_d$SPrai_sp > 1,]))
+         , x="") +
+    theme_minimal()+
+    theme(plot.title = element_text(size = 11))
+
+grid.arrange( plot4, plot3, nrow = 2, ncol = 1)
+```
+

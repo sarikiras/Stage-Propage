@@ -1,0 +1,2179 @@
+---
+title: "Modèles sur les prairies : étude de la densité"
+author: "Sariaka Ramialison"
+date: "2024-05-16"
+output: html_document
+---
+
+
+```{r, warning=FALSE}
+library(performance)
+library(rstatix)
+library(dunn.test)
+library(FSA) # pour le dunnTest
+library(ggpubr)
+library(MASS)
+```
+
+
+```{r}
+# petite précaution pour résoudre un conlit MASS/dplyr
+library(conflicted)
+conflict_prefer("filter", "dplyr")
+conflict_prefer("select", "dplyr")
+```
+
+Ici, on ne traite que de la densité, car on va comparer des modèles avec l'effet aléatoire espèce. 
+
+On ne travaille que sur les espèces 
+
+```{r}
+knitr::read_chunk("Prairies_corrigees.Rmd")
+knitr::read_chunk("propage_pays/ACP_paysage.Rmd")
+```
+
+La tables utiles, avec `id_transect_annee` comme `id` de base
+`releves_prai_tot_sp` Table des communautés 
+`div_tax_tot_sp` Table des indices de diversité taxonomique 
+`super_div_prai_tot_sp_d` super table d'environnement et de diversité taxonomique 
+
+```{r}
+super_div_prai_tot_sp_d
+```
+
+```{r}
+# Table spatiale
+table_sp <- read_csv("tables/transect_annee_geo.csv", show_col_types = FALSE) |>
+  group_by(id_transect) %>%
+  summarise_at(vars(transect_coordonnees), last) |>
+  mutate(lat = sapply(transect_coordonnees, function(x){lat_moy(x)}), 
+         long = sapply(transect_coordonnees, function(x){long_moy(x)}))
+table_sp 
+```
+
+# I. Effet de la fauche 
+
+## I.1 Effet simple de la fauche sur la densité
+
+
+#### a) Modèle : dens ~ fauche
+
+```{r}
+modele_rythme_sp <- glm(NPrai_sp ~ transect_rythme_fauchage_prairie, 
+                      data = super_div_prai_tot_sp_d,
+                      family = quasipoisson(link = "log"))
+summary(modele_rythme_sp)
+```
+```{r}
+model_performance(modele_rythme_sp)
+```
+```{r}
+check_overdispersion(modele_rythme_sp)
+```
+
+
++ Krusal-Wallis car non normalité - ni homoscédasticité [cf: `Prairies_15ans_corr.Rmd`]
+
+#### b) Significativié + test post-hoc
+
+```{r}
+res.kw.dens <- super_div_prai_tot_sp_d |>
+  kruskal_test(NPrai_sp ~ transect_rythme_fauchage_prairie)
+res.kw.dens
+
+# Taille de l'effet
+super_div_prai_tot_sp_d |>
+  as.data.frame() |>
+  kruskal_effsize(NPrai_sp ~ transect_rythme_fauchage_prairie)
+```
+ 
++ tests post-hoc
+
+
+```{r}
+dunn.test(super_div_prai_tot_d$NPrai_t, super_div_prai_tot_d$transect_rythme_fauchage_prairie )
+```
+
+## I.2 Effet de la fauche sur la densité + effet aleatoire espece 1|sp
+
+
+```{r}
+# Table longue avec les densités des espèces
+data_densite_sp <- 
+  releves_prai_tot |>
+  rownames_to_column("id_transect_annee") |>
+  mutate(annee = str_sub(id_transect_annee, -4, -1)) |>
+  inner_join(select(super_div_prai_tot_sp_d, id_transect_annee, transect_rythme_fauchage_prairie, transect_paturage_prairie, semis_sursemis),
+             by= "id_transect_annee" ) |>
+  mutate(degre_fauche = case_when(
+    transect_rythme_fauchage_prairie == "Plusieurs fauches" ~ "3.Plusieurs fauches",
+    transect_rythme_fauchage_prairie == "Fauche précoce" ~ "2.Fauche précoce",
+    transect_rythme_fauchage_prairie == "Fauche tardive" ~ "1.Fauche tardive",
+    transect_rythme_fauchage_prairie == "Non fauchée" ~ "0.Non fauchée",
+  )) |>
+  pivot_longer(`Amaryllis`:`Papillon indéterminé`) |>
+  #pivot_longer(`Amaryllis`:`Vulcain`) |>
+  rename("espece" = "name", "densite" = "value") |>
+  mutate(densite = densite*100) |>
+  left_join(select(table_user_site, id_transect_annee, site_id, user_id, id_transect), by = "id_transect_annee") |>
+  left_join(select(table_sp, id_transect, lat, long), by = "id_transect") |>
+  filter(espece %in% especes) |>
+  select(-user_id, -id_transect) |>
+  unique() 
+  
+data_densite_sp
+```
+
+#### a) Modèle dens ~ fauche + (1|sp)
+
+```{r}
+library(glmmTMB)
+# modèle avec l'effets aléatoire espece - family = gaussian
+modele_eff_sp_red <- glmmTMB(log(densite + 1) ~ degre_fauche + 
+                               (1|espece), 
+                               #(1 + degre_fauche|espece)  ,
+                   data = data_densite_sp)
+summary(modele_eff_sp_red)
+```
+```{r}
+r2(modele_eff_sp_red)
+```
+```{r}
+check_overdispersion(modele_eff_sp_red)
+```
+
+#### b) Significativité fauche
+
+```{r}
+library(car)
+Anova(modele_eff_sp_red, type = 3)
+```
+
+#### c) Performance
+
++ Calculer le pseudo-R2 Macfadden
+
+```{r}
+performance::r2(modele_eff_sp_red)
+```
+Explication:
+marginal R2: value associated with fixed effects
+conditional : R2 value associated with fixed effects plus the random effects
+
+*Analyse* : Le R2 marginal est proche de zéro, ce n'est certainement pas la fauche qui explique les variations. 
+
+#### d) Comparaison par paires
+
+```{r}
+# Comparaison par paires
+library(emmeans)
+emmeans(modele_eff_sp_red, list(pairwise ~ degre_fauche), 
+        adjust = "dunn",
+        pbkrtest.limit = 6000) 
+```
+Avec l'effet aléatoire espèces, on a toujours la p-value significative pour:
+0.Non fauchée - 3.Plusieurs fauches
+1.Fauche tardive - 3.Plusieurs fauches
+
+## I.3 Effet de la fauche sur la densité + effet aleatoire espece 1|sp + effet aleatoire annee 1|an
+
+
+#### a) Modèle dens ~ fauche + (1|sp) + (1|an)
+
+```{r}
+library(glmmTMB)
+# modèle avec l'effets aléatoire espece - family = gaussian
+modele_eff_sp_an <- glmmTMB(densite ~ degre_fauche + (1|espece) + (1|annee),
+                   data = data_densite_sp)
+summary(modele_eff_sp_an)
+```
+
+#### b) Significativité fauche
+
+```{r}
+library(car)
+Anova(modele_eff_sp_an, type = 3)
+```
+#### c) Performance
+
++ Calculer le pseudo-R2 Macfadden
+
+```{r}
+performance::r2(modele_eff_sp_an)
+```
+Explication:
+marginal R2: value associated with fixed effects
+conditional : R2 value associated with fixed effects plus the random effects
+
+*Analyse* : Le R2 marginal est proche de zéro, ce n'est certainement pas la fauche qui explique les variations. 
+
+#### d) Comparaison par paires
+
+```{r}
+# Comparaison par paires
+library(emmeans)
+emmeans(modele_eff_sp_an, list(pairwise ~ degre_fauche), 
+        adjust = "dunn",
+        pbkrtest.limit = 6000) 
+```
+Avec les effets aléatoire espèce & annee, on a toujours la p-value significative pour:
+0.Non fauchée - 3.Plusieurs fauches
+1.Fauche tardive - 3.Plusieurs fauches
+
+
+## I.4 Comparaison : effet fauche + espece
+
+#### a) Modèle : dens ~ fauche + espece
+
+```{r}
+# Sans changer l'intercept
+
+modele_eff_sp_init <- glm(densite ~ degre_fauche + espece,
+                   data = data_densite_sp)
+summary(modele_eff_sp_init)
+```
+#### b) Modèle : performance
+
+```{r}
+performance::r2(modele_eff_sp_init)
+```
+
+# II.  Effet du pâturage
+
+## II.1 Effet simple du paturage sur la densité
+
+#### a) Modèle : dens ~ fauche
+
+```{r}
+modele_patur_sp <- glm(NPrai_sp ~ transect_paturage_prairie, 
+                      data = super_div_prai_tot_sp_d)
+summary(modele_patur_sp)
+```
+
+
+#### b) Significativié + test post-hoc eventuel
+
++ Krusal-Wallis car non normalité - ni homoscédasticité [cf: `Prairies_15ans_corr.Rmd`]
+
+```{r}
+res.kw.dens.pat <- super_div_prai_tot_sp_d |>
+  kruskal_test(NPrai_sp ~ transect_paturage_prairie)
+res.kw.dens.pat
+```
+ Pas d'effet du paturage
+ 
+
+## I.2 Effet du paturage sur la densité + effet aleatoire espece 1|sp
+
+
+#### a) Modèle dens ~ fauche + (1|sp)
+
+```{r}
+library(glmmTMB)
+# modèle avec l'effets aléatoire espece - family = gaussian
+modele_eff_sp_red.pat <- glmmTMB(densite ~ transect_paturage_prairie + (1|espece),
+                   data = data_densite_sp)
+summary(modele_eff_sp_red.pat)
+```
+
+```{r}
+Anova(modele_eff_sp_red.pat, type = 3)
+```
+
+# III. Effet simple de l'habitat
+
+```{r}
+table_correspondance_CLC <- read_csv("/Users/sariakasalomon-ramialison/Desktop/Propage/table_correspondance_CLC.csv", show_col_types = FALSE) 
+var_buffers_ACP <- read_csv("/Users/sariakasalomon-ramialison/Desktop/Propage/var_buffers_ACP.csv", show_col_types = FALSE) 
+```
+
+
+
+## III.1 Table GENERALE d'habitat et de paysage
+
++ Table de correspondance d'habitat par transect [avec id_transect, annee, id_transect_annee]
+
+```{r}
+# la `table_correspondance_CLC` est dans le fichier `ACP_paysage.Rmd`
+habitat_transect_an <- read.csv("/Users/sariakasalomon-ramialison/Desktop/Propage/data_habitat_transect_an.csv") |>
+  select(-geometry, -Habitats) |>
+  rename(code_clc_niveau_3 = CODE_18) |>
+  left_join(table_correspondance_CLC, by = "code_clc_niveau_3") |>
+  rename(classe_habitat = `NOUVEAU CLASSEMENT`, habitat = `NOUVEAU LIBELLE`) |>
+  mutate(classe_habitat = paste0(classe_habitat, "_", habitat))
+```
+
+
+```{r}
+habitat_transect_an  |>
+  filter (id_transect > 2 & id_transect < 3) |>
+  arrange(by = id_transect)
+```
+
+
+
+```{r}
+# Ajout des paysages 
+# On joint la table `var_buffers_ACP` pour ajouter les variables paysagères dans notre table
+habitat_transect_an <- habitat_transect_an |>
+  left_join(var_buffers_ACP, by = 'id_transect') |>
+  left_join(select(table_user_site, id_transect_annee, site_id, user_id), by = "id_transect_annee")
+habitat_transect_an
+```
+```{r}
+summary(habitat_transect_an)
+```
+
++ Faire une super table pour les prairies 
+
+```{r}
+super_table_prai <- super_div_prai_tot_sp_d |>
+  left_join(select(habitat_transect_an, id_transect_annee, id_transect, annee, classe_habitat, habitat, axe1_1000:site_id),
+            by = "id_transect_annee") |>
+  unique()
+super_table_prai
+```
+```{r}
+super_table_prai |>
+  filter(is.na(axe1_1000))
+```
+
+
+
+## III.2. Modèle simple habitat
+
+
+```{r}
+table_Hab_niv1 <- super_table_prai |>
+  as.data.frame() |>
+  group_by(classe_habitat, habitat) |>
+  summarise(n=n()) 
+table_Hab_niv1
+```
+
+
+### III.2.1 Densité
+
+```{r}
+plot <- super_table_prai |>
+  ggplot(aes(x=classe_habitat, y=NPrai_sp, fill=classe_habitat)) + 
+  geom_boxplot(show.legend = FALSE) +
+  geom_hline(yintercept = mean(super_table_prai$NPrai_sp), color='red') +
+  geom_text(data = table_Hab_niv1,
+            aes(label = paste("n =", n)), # Affichage de l'effectif au-dessus des boxplots
+            x = table_Hab_niv1$classe_habitat,
+            y = Inf ,
+            vjust = 0.9,
+            size = 3
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size =11)) +
+  labs(x = "Habitat", 
+       y = "Densité", 
+       title = paste("Densité et Habitats \nNb transects =",
+                     nrow(super_table_prai)), 
+       fill="") 
+plot
+```
+#### a) Modèle 
+
+
++ On effectue un modèle linéaire avec uniquement habitat comme variable explicative 
+
+```{r}
+modele_hab_dens <- glm(NPrai_sp ~ classe_habitat, 
+                      data = super_table_prai)
+summary(modele_hab_dens)
+```
+*Remarque* : L'intercept est ici "Cultures permanentes". 
+
+
+#### b) Vérification des conditions 
+
+Peut-on faire une anova sur ce modèle?
+
++ Vérification des conditions 
+
+```{r}
+# Créer un QQ plot des résidus
+ggqqplot(residuals(modele_hab_dens))
+
+# Faire un test de Shapiro des résidus
+shapiro_test(residuals(modele_hab_dens))
+
+plot(residuals(modele_hab_dens))
+
+#Faire un test de Levene pour l'homoscédasticité
+super_table_prai |>
+  levene_test(NPrai_sp ~ habitat)
+
+plot(modele_hab_dens,1)
+```
+Ni normalité, ni homoscédasticité 
+
+#### c) Test de Kruskal-Wallis
+
+Non normalité, on effectue un test de Kruskall-Wallis pour vérifier une significativité
+
+```{r}
+res.kw.hab.dens <- super_table_prai |>
+  kruskal_test(NPrai_sp ~ habitat)
+res.kw.hab.dens
+```
+Effet significatif de l'habitat  sur la densité
+
+
+```{r}
+# importance de l'effet?
+super_table_prai |>
+  as.data.frame() |>
+  kruskal_effsize(NPrai_sp ~ habitat)
+```
+Effet large (donc supérieur au rythme de fauche!)
+
+#### d) Correction de Dunn
+
+Test post-hoc car effet significatif : correction de Dunn
+
++ Méthode 1
+
+```{r}
+# Test post-hoc 
+# Correction de Dunn [s'utilise même si les données ne suivent pas une loi normale]
+res.dunn.hab <- dunnTest (NPrai_sp ~ habitat, 
+                         data = super_table_prai,
+                         method = "bonferroni")
+res.dunn.hab$res
+```
++ Récupération des résultats significatifs pour les tests post-hoc
+
+```{r}
+res.dunn.hab$res$Comparison[res.dunn.hab$res$P.adj < 0.05]
+```
+
+
++ Méthode 2
+
+
+```{r}
+dunn.test(super_table_prai$NPrai_sp, super_table_prai$habitat)
+```
+
+
+### I.2.2 Richesse
+
+```{r}
+plot <- super_table_prai |>
+  ggplot(aes(x=classe_habitat, y=SPrai_sp, fill=classe_habitat)) + 
+  geom_boxplot(show.legend = FALSE) +
+  geom_hline(yintercept = mean(super_table_prai$SPrai_sp), color='red') +
+  geom_text(data = table_Hab_niv1,
+            aes(label = paste("n =", n)), # Affichage de l'effectif au-dessus des boxplots
+            x = table_Hab_niv1$classe_habitat,
+            y = Inf ,
+            vjust = 0.9,
+            size = 3
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size =11)) +
+  labs(x = "Habitat", 
+       y = "Richesse", 
+       title = paste("Richesse et Habitats \nNb transects =",
+                     nrow(super_table_prai)), 
+       fill="") 
+plot
+```
+#### a) Modèle
+
+```{r}
+# on fait un modèle de Poisson
+modele_hab_rich <- glm(SPrai_sp ~ classe_habitat, 
+                      data = super_table_prai,
+                      family = "poisson")
+summary(modele_hab_rich)
+```
+
+#### b) Vérification des hypothèses pour les tests
+
+Peut on faire une Anova sur ce modèle?
+
++ Vérification des conditions sur le modele Poisson
+
+```{r}
+# Créer un QQ plot des résidus
+ggqqplot(residuals(modele_hab_rich))
+
+# Faire un test de Shapiro des résidus
+shapiro_test(residuals(modele_hab_rich))
+
+plot(residuals(modele_hab_rich))
+
+# Faire un test de Levene pour l'homoscédasticité
+super_table_prai |>
+  levene_test(SPrai_sp ~ habitat)
+
+#plot(model_S_rythme_sp,1)
+```
+
+Pas de normalité des résidus, homogénéité des variances !!
+
+#### c) Test de Kruskal-Wallis
+
++ Test Krukal-Wallis
+
+```{r}
+super_table_prai |>
+  kruskal_test(SPrai_sp ~ habitat)
+super_table_prai |>
+  as.data.frame() |>
+  kruskal_effsize(SPrai_sp ~ habitat)
+```
+Significativité : effet du rythme de fauche sur la richesse
+
+
+#### d) Correction de Dunn
+
+
++ Méthode 1
+
+```{r}
+# Test post-hoc 
+# Correction de Dunn [s'utilise même si les données ne suivent pas une loi normale]
+res.dunn.hab.Ssp <- dunnTest (SPrai_sp ~ habitat, 
+                         data = super_table_prai,
+                         method = "bonferroni")
+res.dunn.hab.Ssp
+```
+Différences significatives: 
+- Forêts et milieux semi-naturels - Surfaces en eau
+- Surfaces en eau - Territoires agricoles
+- Forêts et milieux semi-naturels - Territoires artificialisés
+- Territoires agricoles - Territoires artificialisés
+
++ Méthode 2
+
+
+```{r}
+dunn.test(super_table_prai$SPrai_sp, super_table_prai$habitat)
+```
+
+mmm, on n'a pas les mêmes résultats 
+
+
+### I.2.3 Indice de Shannon
+
++ Table pour Shannon
+
+```{r}
+table_Hab_niv1_sh <- super_table_prai |>
+  as.data.frame() |>
+  filter(NPrai_sp !=0) |>
+  group_by(classe_habitat, habitat) |>
+  summarise(n=n()) 
+table_Hab_niv1_sh
+```
+
+
+```{r}
+plot <- super_table_prai |>
+  filter(NPrai_sp !=0) |>
+  ggplot(aes(x=classe_habitat, y=HPrai_sp, fill=classe_habitat)) + 
+  geom_boxplot(show.legend = FALSE) +
+  geom_hline(yintercept = mean(super_table_prai$HPrai_sp[super_table_prai$NPrai_sp !=0]), color='red') +
+  geom_text(data = table_Hab_niv1_sh,
+            aes(label = paste("n =", n)), # Affichage de l'effectif au-dessus des boxplots
+            x = table_Hab_niv1_sh$classe_habitat,
+            y = Inf ,
+            vjust = 0.9,
+            size = 3
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size =11)) +
+  labs(x = "Habitat", 
+       y = "Indice de Shannon", 
+       title = paste("Shannon et Habitats \nNb transects =",
+                     nrow(super_table_prai[super_table_prai$NPrai_sp !=0,])), 
+       fill="") 
+plot
+```
+
+#### a) Modèle
+
+```{r}
+# modèle avec `Non fauché` en intercept
+modele_hab_shan <- glm(HPrai_sp ~ classe_habitat, 
+                      data = super_table_prai[super_table_prai$NPrai_sp !=0,])
+summary(modele_hab_shan)
+```
+
+#### b) Vérification des hypothèses pour les tests
+
+
+Peut-on faire une anova sur ce modèle?
+
++ Vérification des conditions 
+
+```{r}
+# Créer un QQ plot des résidus
+ggqqplot(residuals(modele_hab_shan))
+
+# Faire un test de Shapiro des résidus
+shapiro_test(residuals(modele_hab_shan))
+
+plot(residuals(modele_hab_shan))
+
+#Faire un test de Levene pour l'homoscédasticité
+super_table_prai |>
+  filter(NPrai_sp != 0) |>
+  levene_test(HPrai_sp ~ habitat)
+
+plot(modele_hab_shan,1)
+```
+
+
+#### c) Test de Kruskall-Wallis 
+
+Non normalité, on effectue un test de Kruskall-Wallis pour vérifier une significativité
+
+```{r}
+res.kw.hab.sh <- super_table_prai |>
+  filter(NPrai_sp != 0) |>
+  kruskal_test(HPrai_sp ~ habitat)
+res.kw.hab.sh
+```
+Effet significatif de l'habitat sur l'indice de Shannon
+
+
+```{r}
+# importance de l'effet?
+super_table_prai |>
+  as.data.frame() |>
+  filter(NPrai_sp != 0) |>
+  kruskal_effsize(HPrai_sp ~ habitat)
+```
+
+#### d) Correction de Dunn
+
+Test post-hoc car effet significatif : correction de Dunn
+
++ Méthode 1
+
+```{r}
+# Test post-hoc 
+# Correction de Dunn [s'utilise même si les données ne suivent pas une loi normale]
+res.dunn.hab.sh <- dunnTest (HPrai_sp ~ habitat, 
+                         data = super_table_prai[super_table_prai$NPrai_sp!=0,],
+                         method = "bonferroni")
+res.dunn.hab.sh
+```
+Différence significative :
+Forêts et milieux semi-naturels - Territoires artificialisés
+Territoires agricoles - Territoires artificialisés
+
+
++ Méthode 2
+
+```{r}
+dunn.test(super_table_prai[super_table_prai$NPrai_sp!=0,]$HPrai_sp,
+          super_table_prai[super_table_prai$NPrai_sp!=0,]$habitat)
+```
+Forêts et milieux semi-naturels - Territoires artificialisés
+Territoires agricoles - Territoires artificialisés
+
+On a ici en plus :
+
+Forêts et milieux semi-naturels - Surfaces en eau
+Surfaces en eau - Territoires agricoles [chelou]
+
+## III.4 Modèle Fauche + Habitat [avec ou sans effet aléatoire espèce]
+
+
+```{r}
+super_table_prai <- super_table_prai |>
+  mutate(degre_fauche = case_when(
+    transect_rythme_fauchage_prairie == "Plusieurs fauches" ~ "3.Plusieurs fauches",
+    transect_rythme_fauchage_prairie == "Fauche précoce" ~ "2.Fauche précoce",
+    transect_rythme_fauchage_prairie == "Fauche tardive" ~ "1.Fauche tardive",
+    transect_rythme_fauchage_prairie == "Non fauchée" ~ "0.Non fauchée",
+  )) 
+```
+
+
+
+
+### III.4.1 Densité
+
+
+```{r}
+super_table_prai |>
+  ggplot(aes(x=classe_habitat, y=NPrai_sp, fill=degre_fauche)) + 
+  geom_boxplot() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Habitat", 
+       y = "Densité", 
+       title = "Densité en fonction de l'habitat et du rythme fauche", 
+       fill="")
+```
+
+
+#### a) Modèle simple
+
++ On effectue un modèle linéaire avec uniquement Fauche et Habitat comme variable explicative 
+
+```{r}
+modele_fauch_hab_dens <- glm(NPrai_sp ~ classe_habitat + degre_fauche, 
+                      data = super_table_prai)
+summary(modele_fauch_hab_dens)
+```
+*Remarque* : L'intercept est ici "Forêts et milieux semi-naturels". A priori les moins artificialisés.
+
+
+```{r}
+performance::r2(modele_fauch_hab_dens)
+```
+```{r}
+library(car)
+Anova(modele_fauch_hab_dens)
+```
+
+
+#### b) Modèle avec effet aléatoire 1|sp
+
++ Table longue
+
+
+```{r}
+data_densite_sp <- data_densite_sp |>
+  left_join(select(super_table_prai, 
+                   id_transect, id_transect_annee, 
+                   habitat,
+                   classe_habitat,
+                   axe1_1000:axe2_10000),
+            by = "id_transect_annee")
+```
+
++  Modèle
+
+```{r}
+# modèle avec l'effets aléatoire espece - family = gaussian
+modele_fauch_hab_eff_sp <- glmmTMB(densite ~ classe_habitat + degre_fauche + (1|espece),
+                   data = data_densite_sp)
+modele_fauch_hab_eff_sp
+```
+
+```{r}
+summary(modele_fauch_hab_eff_sp)
+```
+```{r}
+performance::r2(modele_fauch_hab_eff_sp)
+```
+```{r}
+library(car)
+Anova(modele_fauch_hab_eff_sp)
+```
+
++ Selection de modèles : step AIC
+
+```{r}
+lmerTest::step(modele_fauch_hab_eff_sp)
+```
+
+### III.4.1 Richesse
+
+
+```{r}
+super_table_prai |>
+  ggplot(aes(x=habitat, y=SPrai_sp, fill=degre_fauche)) + 
+  geom_boxplot() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Habitat", 
+       y = "Richesse", 
+       title = "Richesse en fonction de l'habitat et du rythme fauche", 
+       fill="")
+```
+#### a) Modèle Fauche + Habitat
+
++ On effectue un modèle linéaire avec uniquement Fauche et Habitat comme variable explicative 
+
+```{r}
+modele_S_fauch_hab_dens <- glm(SPrai_sp ~ classe_habitat + degre_fauche, 
+                      data = super_table_prai,
+                      family =  "poisson")
+summary(modele_S_fauch_hab_dens)
+```
+
+```{r}
+performance::r2(modele_S_fauch_hab_dens)
+```
+
+
+```{r}
+library(car)
+anova_test(modele_S_fauch_hab_dens)
+```
+
+
+
+#### b) Modèle Fauche + Habitat + Paturage
+
+```{r}
+modele_S_fauch_hab_dens_pat <- glm(SPrai_sp ~ classe_habitat + 
+                                     transect_paturage_prairie + 
+                                     degre_fauche +
+                                     transect_paturage_prairie*degre_fauche, 
+                      data = super_table_prai,
+                      family =  "poisson")
+summary(modele_S_fauch_hab_dens_pat)
+```
+
+```{r}
+performance::r2(modele_S_fauch_hab_dens_pat)
+```
+```{r}
+anova_test(modele_S_fauch_hab_dens_pat, type = 3)
+```
+
+
+```{r}
+lmerTest::step(modele_S_fauch_hab_dens_pat)
+```
+
+# IV. Ajout de l'effet du paysage
+
+
+### IV.1. Densité
+
+#### IV.1.1. Modele simple dens ~ fauche + habitat + paysage
+
+
+```{r}
+modele.prai <-  glm(NPrai_sp ~ classe_habitat + 
+                      degre_fauche + 
+                      axe1_1000 +
+                      axe2_1000 +
+                      axe3_1000 +
+                      axe1_5000 +
+                      axe2_5000 +
+                      axe3_5000 +
+                      axe1_10000 +
+                      axe2_10000 +
+                      axe3_10000 , 
+                      data = super_table_prai)
+summary(modele.prai)
+```
+
+```{r}
+model_performance(modele.prai)
+```
+
+
+
+```{r}
+Anova(modele.prai)
+```
+
+```{r}
+lmerTest::step(modele.prai)
+```
+```{r}
+summary(glm(formula = NPrai_sp ~ classe_habitat + degre_fauche + axe1_1000 + 
+    axe2_1000 + axe1_5000 + axe2_5000, data = super_table_prai))
+```
+
+#### IV.1.2. Modeles avec effet aléatoire : dens ~ fauche + habitat + paysage + (1|sp) + (1|an) + (1|site) + (1|user)
+
++ Modèle en norm + (1|sp)
+
+```{r}
+# modèle avec l'effets aléatoire espece - family = gaussian
+modele.prai.sp_an <- glmmTMB(densite  ~ classe_habitat + 
+                                   degre_fauche +
+                                   axe1_1000 +
+                                   axe2_1000 +
+                                   axe1_5000 +
+                                   axe2_5000 +
+                                   axe1_10000 +
+                                   axe2_10000 +
+                                   (1|espece) + 
+                                   (1|annee),
+                                   # (1|site_id) + 
+                                   # (1|user_id),
+                                 data = data_densite_sp)
+summary(modele.prai.sp_an)
+```
+```{r}
+model_performance(modele.prai.sp_an)
+```
+```{r}
+Anova(modele.prai.sp_an)
+```
+```{r}
+lmerTest::step(modele.prai.sp_an)
+```
+
++ Modèle en log_norm + (1+F|sp) [le modèle norm ne converge pas]
+
+```{r}
+# modèle avec l'effets aléatoire espece - family = gaussian
+modele.prai.log.eff_sp_an <- glmmTMB(log(densite+1) ~ classe_habitat + 
+                                   degre_fauche +
+                                   axe1_1000 +
+                                   axe2_1000 +
+                                   axe1_5000 +
+                                   axe2_5000 +
+                                   axe1_10000 +
+                                   axe2_10000 +
+                                   (1 + degre_fauche|espece) + 
+                                   (1|annee),
+                                 data = data_densite_sp)
+summary(modele.prai.log.eff_sp_an)
+```
+```{r}
+model_performance(modele.prai.log.eff_sp_an)
+```
+```{r}
+Anova(modele.prai.log.eff_sp_an)
+```
+
+
++ Modèle en nbinom + (1+F|sp)
+
+```{r}
+# modèle avec l'effets aléatoire espece - family = gaussian
+modele.prai.eff_sp_an <- glmmTMB(densite ~ classe_habitat + 
+                                   degre_fauche +
+                                   axe1_1000 +
+                                   axe2_1000 +
+                                   axe1_5000 +
+                                   axe2_5000 +
+                                   axe1_10000 +
+                                   axe2_10000 +
+                                   #(1|espece) + 
+                                   (1 + degre_fauche|espece) + 
+                                   (1|annee),
+                                 family = "nbinom2",
+                                 data = data_densite_sp)
+summary(modele.prai.eff_sp_an)
+```
+```{r}
+performance::r2(modele.prai.eff_sp_an)
+```
+```{r}
+Anova(modele.prai.eff_sp_an)
+```
+
+
+### IV.1. Richesse
+
+#### a) Modèle complet
+
+On utilise la table super_table_prai.
+On garde même les valeurs de la richesse nulle. 
+
+
++ Modèle Poisson
+
+```{r}
+#library(MASS)
+modele.prai.S <- glm(SPrai_sp ~ classe_habitat + 
+                      degre_fauche + 
+                      transect_paturage_prairie +
+                      transect_paturage_prairie*degre_fauche +
+                      axe1_1000 +
+                      axe2_1000 +
+                      axe3_1000 +
+                      axe1_5000 +
+                      axe2_5000 +
+                      axe3_5000 +
+                      axe1_10000 +
+                      axe2_10000 +
+                      axe3_10000, 
+                      data = super_table_prai,
+                      family = "poisson"
+                      )
+summary(modele.prai.S)
+```
+```{r}
+model_performance(modele.prai.S)
+```
+```{r}
+r2(modele.prai.S)
+```
+```{r}
+lmerTest::step(modele.prai.S)
+```
+
+
+#### b) Modèle sélectionné
+
+```{r}
+model.prai.S.selec <- glm(formula = SPrai_sp ~ classe_habitat +
+                            degre_fauche +
+                            transect_paturage_prairie +
+                            axe1_1000 +
+                            axe2_1000 +
+                            axe3_1000 +
+                            axe2_5000 +
+                            axe3_5000 +
+                            axe1_10000 +
+                            axe3_10000,
+                          family = "poisson",
+                          data = super_table_prai)
+
+summary(model.prai.S.selec)
+```
+```{r}
+model_performance(model.prai.S.selec)
+```
+
+
+```{r}
+# Créer un QQ plot des résidus
+ggqqplot(residuals(model.prai.S.selec))
+
+# Faire un test de Shapiro des résidus
+shapiro_test(residuals(model.prai.S.selec))
+
+plot(residuals(model.prai.S.selec))
+
+plot(model.prai.S.selec)
+```
+```{r}
+library(car)
+Anova(model.prai.S.selec)
+```
++ Modèle Negative binomial : pas de convergence 
+
+```{r}
+library(MASS)
+modele.prai.S.nb <- glm.nb(formula = SPrai_sp ~ classe_habitat +
+                            degre_fauche +
+                            transect_paturage_prairie +
+                            axe1_1000 +
+                            axe2_1000 +
+                            axe3_1000 +
+                            axe2_5000 +
+                            axe3_5000 +
+                            axe1_10000 +
+                            axe3_10000,
+                          data = super_table_prai
+                          )
+summary(modele.prai.S.nb)
+```
+
+#### c) VIF avant stepAIC
+
+
+```{r}
+library(car)
+vif(modele.prai.S, type = "predictor")
+```
+```{r}
+# Si on enlève la variables aux VIF supérieurs à 10?
+modele.prai.S.vif <- glm(SPrai_sp ~ degre_fauche + 
+                      transect_paturage_prairie +
+                      transect_paturage_prairie*degre_fauche +
+                      axe1_1000 +
+                      axe2_1000 +
+                      axe3_1000 +
+                      #axe1_5000 +
+                      #axe2_5000 +
+                      axe3_5000 +
+                      axe1_10000 +
+                      axe2_10000 +
+                      axe3_10000, 
+                      data = super_table_prai,
+                      family = "poisson"
+                      )
+summary(modele.prai.S.vif)
+
+```
+
+
+```{r}
+lmerTest::step(modele.prai.S.vif)
+```
+
++ Nouveau modèle selectionné
+
+```{r}
+model.prai.S.selec.vif <- glm(formula = SPrai_sp ~ degre_fauche +
+                            transect_paturage_prairie +
+                            axe1_1000 +
+                            axe3_1000 +
+                            axe3_5000 +
+                            axe1_10000 +
+                            axe2_10000 + 
+                            axe3_10000,
+                          family = "poisson",
+                          data = super_table_prai)
+
+summary(model.prai.S.selec.vif)
+```
+
+```{r}
+model_performance(model.prai.S.selec.vif)
+```
+
+# V. Modèles de juin, pour la densité
+
+Suite à la réunion avec Martin et Benjamin, on ne garde que les valeurs des 2 premiers axes paysagers
+Comme l'axe 1 5000 est hyper corrélé aux autres, on l'enlève.
+Attention dans la table de base ci dessous, la colonne log_NPrai_sp correspond à log(NPrai_sp+1)
++ Table de base
+
+```{r}
+super_table_prai
+```
+### V.1. Modèles sans effet aléatoire 
+
+#### a. Sans le semis_sursemis
+
+##### Densité
+
+```{r}
+# Modèle linéaire simple
+modele.prai.dens.1 <- glm(NPrai_sp ~ degre_fauche +
+                         transect_paturage_prairie +
+                          transect_paturage_prairie*degre_fauche +
+                          axe1_1000 +
+                          axe2_1000 +
+                          #axe1_5000 +
+                          #axe2_5000 +
+                          axe1_10000 +
+                          axe2_10000,
+                      data = super_table_prai
+                      )
+summary(modele.prai.dens.1)
+```
+
+
+```{r}
+library(DHARMa)
+simul1 <- simulateResiduals(modele.prai.dens.1)
+plot(simul1)
+```
+
+```{r}
+model_performance(modele.prai.dens.1)
+check_overdispersion(modele.prai.dens.1)
+check_autocorrelation(modele.prai.dens.1)
+check_collinearity(modele.prai.dens.1)
+```
+
+```{r}
+Anova(modele.prai.dens.1)
+```
+
+
+##### log(Densité), où Densité ≠ 0
+
+```{r}
+super_table_prai$logN = log(super_table_prai$NPrai_sp)
+```
+
+
+
+```{r}
+write_csv(super_table_prai, "super_table_prai.csv")
+```
+
+
+
+```{r}
+# Modèle log-linéaire. On enlève les abondances nulles!
+modele.prai.dens.2 <- glm(logN ~ degre_fauche +
+                         transect_paturage_prairie +
+                          transect_paturage_prairie*degre_fauche +
+                          axe1_1000 +
+                          axe2_1000 +
+                          #axe1_5000 +
+                          #axe2_5000 +
+                          axe1_10000 +
+                          axe2_10000,
+                      data = super_table_prai[super_table_prai$NPrai_sp !=0,]
+                      )
+summary(modele.prai.dens.2)
+```
+```{r}
+simul2 <- simulateResiduals(modele.prai.dens.2)
+plot(simul2)
+```
+```{r}
+model_performance(modele.prai.dens.2)
+#check_convergence(modele.prai.dens.2)
+check_overdispersion(modele.prai.dens.2)
+check_autocorrelation(modele.prai.dens.2)
+check_collinearity(modele.prai.dens.2)
+check_heteroscedasticity(modele.prai.dens.2)
+```
+```{r}
+Anova(modele.prai.dens.2)
+```
+```{r}
+plot(modele.prai.dens.2)
+```
+
+
+##### log(Densité + 1)
+
+
+```{r}
+# Modèle log-linéaire + 1
+modele.prai.dens.3 <- glm(log_NPrai_sp ~ degre_fauche +
+                         transect_paturage_prairie +
+                          transect_paturage_prairie*degre_fauche +
+                          axe1_1000 +
+                          axe2_1000 +
+                          #axe1_5000 +
+                          axe2_5000 +
+                          axe1_10000 +
+                          axe2_10000,
+                      data = super_table_prai
+                      )
+summary(modele.prai.dens.3)
+```
+```{r}
+# Résidus
+simul3 <- simulateResiduals(modele.prai.dens.3)
+plot(simul3)
+
+# performance
+model_performance(modele.prai.dens.3)
+check_overdispersion(modele.prai.dens.3)
+check_autocorrelation(modele.prai.dens.3)
+check_collinearity(modele.prai.dens.3)
+```
+```{r}
+Anova(modele.prai.dens.3)
+```
+
+
+### V.2. Modèles avec effets aléatoires site et année
+
+#### a. Sans le semis_sursemis, log-densité ou densité ≠ 0
+
+
+
+```{r}
+table_non_nulle <- super_table_prai[super_table_prai$NPrai_sp !=0,]
+# Fixer l'ordre des niveaux pour la variable degre_fauche
+table_non_nulle$degre_fauche <- factor(table_non_nulle$degre_fauche,
+                                       levels = c("0.Non fauchée" , "1.Fauche tardive",
+                                                  "2.Fauche précoce", "3.Plusieurs fauches"))
+```
+
+
+```{r}
+# Modèle log-linéaire 
+modele.prai.dens.alea.ssesp <- glmmTMB(logN ~ degre_fauche +
+                                     transect_paturage_prairie +
+                                     transect_paturage_prairie:degre_fauche +
+                                     axe1_1000 +
+                                     axe2_1000 +
+                                     #axe1_5000 +
+                                     #axe2_5000 +
+                                     axe1_10000 +
+                                     axe2_10000 +
+                                     #(1|espece) +
+                                     (1|annee) +
+                                     (1|site_id/id_transect) ,
+                                   data = super_table_prai[super_table_prai$NPrai_sp !=0,]
+)
+summary(modele.prai.dens.alea.ssesp)
+
+modele.prai.S.alea.ssesp <- glmmTMB(SPrai_sp ~ degre_fauche +
+                                     transect_paturage_prairie +
+                                     transect_paturage_prairie:degre_fauche +
+                                     axe1_1000 +
+                                     axe2_1000 +
+                                     #axe1_5000 +
+                                     #axe2_5000 +
+                                     axe1_10000 +
+                                     axe2_10000 +
+                                     #(1|espece) +
+                                     (1|annee) +
+                                     (1|site_id/id_transect) ,
+                                    family = "poisson",
+                                   data = super_table_prai[super_table_prai$NPrai_sp !=0,]
+)
+
+modele.prai.H.alea.ssesp <- glmmTMB(HPrai_sp ~ degre_fauche +
+                                     transect_paturage_prairie +
+                                     transect_paturage_prairie:degre_fauche +
+                                     axe1_1000 +
+                                     axe2_1000 +
+                                     #axe1_5000 +
+                                     #axe2_5000 +
+                                     axe1_10000 +
+                                     axe2_10000 +
+                                     #(1|espece) +
+                                     (1|annee) +
+                                     (1|site_id/id_transect) ,
+                                    #family = "poisson",
+                                   data = super_table_prai[super_table_prai$NPrai_sp !=0,]
+)
+```
+
+```{r}
+# Résidus
+simul1.1 <- simulateResiduals(modele.prai.dens.alea.ssesp)
+
+png("residus_NPrai.png", width = 800, height = 500)
+plot(simul1.1)
+dev.off()
+
+# performance
+model_performance(modele.prai.dens.alea.ssesp)
+check_overdispersion(modele.prai.dens.alea.ssesp)
+check_autocorrelation(modele.prai.dens.alea.ssesp)
+check_collinearity(modele.prai.dens.alea.ssesp)
+```
+
+```{r}
+Anova(modele.prai.dens.alea.ssesp)
+```
+```{r}
+library(xtable)
+xtable(Anova(modele.prai.dens.alea.ssesp))
+```
+```{r}
+# prédiction
+# Charger les packages nécessaires
+
+# Créer un nouveau jeu de données pour la prédiction
+new_data <- expand.grid(degre_fauche = unique(table_non_nulle$degre_fauche),
+                        transect_paturage_prairie = unique(data_densite_sp$transect_paturage_prairie),
+                        #transect_paturage_prairie = "Non pâturée",
+                        axe1_1000 = mean(table_non_nulle$axe1_1000),
+                        axe2_1000 = mean(table_non_nulle$axe2_1000),
+                        #axe2_5000 = mean(table_non_nulle$axe2_5000),
+                        axe1_10000 = mean(table_non_nulle$axe1_10000),
+                        axe2_10000 = mean(table_non_nulle$axe2_10000))
+new_dataS <- new_data
+new_dataH <- new_data
+
+# Obtenir les prédictions avec intervalles de confiance sans effets aléatoires
+predictions <- predict(modele.prai.dens.alea.ssesp, newdata = new_data, se.fit = TRUE, allow.new.levels=TRUE, re.form = NA, type = "response")
+
+# Ajouter les prédictions et les intervalles de confiance dans le nouveau jeu de données
+new_data$fit <- exp(predictions$fit)
+new_data$se.fit <- exp(predictions$se.fit)
+
+# Calcul des intervalles de confiance
+new_data <- new_data %>%
+  mutate(lower = fit - 1.96 * se.fit,
+         upper = fit + 1.96 * se.fit)
+
+# Richesse
+
+predictionsS <- predict(modele.prai.S.alea.ssesp, newdata = new_dataS, se.fit = TRUE, allow.new.levels=TRUE, re.form = NA, type = "response")
+new_dataS$fit <- predictionsS$fit
+new_dataS$se.fit <- predictionsS$se.fit
+
+new_dataS <- new_dataS %>%
+  mutate(lower = fit - 1.96 * se.fit,
+         upper = fit + 1.96 * se.fit)
+
+# Shannon
+predictionsH <- predict(modele.prai.H.alea.ssesp, newdata = new_dataS, se.fit = TRUE, allow.new.levels=TRUE, re.form = NA, type = "response")
+new_dataH$fit <- predictionsH$fit
+new_dataH$se.fit <- predictionsH$se.fit
+
+new_dataH <- new_dataH %>%
+  mutate(lower = fit - 1.96 * se.fit,
+         upper = fit + 1.96 * se.fit)
+
+
+# Créer le graphique
+# ici on prend comme niveau non paturée
+
+#png("tendance_dens_non_pat.png")
+ggplot(subset(new_data, 
+              transect_paturage_prairie == "Non pâturée"
+              ),
+              aes(x = degre_fauche, y = fit, group = transect_paturage_prairie)) +
+  geom_line(aes(group = transect_paturage_prairie)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper, fill = ""), alpha = 0.2) +
+  labs(x = "", y = "Densité prédite") +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_x_discrete(drop = FALSE)  # Pour forcer l'affichage de tous les niveaux de degre_fauche
+#dev.off()
+
+#png("tendance_rich_non_pat.png")
+#png("tendance_rich_pat.png")
+ggplot(subset(new_dataS, 
+              transect_paturage_prairie == "Non pâturée"
+              #transect_paturage_prairie == "Pâturée"
+              ),
+              aes(x = degre_fauche, y = fit, group = transect_paturage_prairie)) +
+  geom_line(aes(group = transect_paturage_prairie)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper, fill = ""), alpha = 0.2) +
+  labs(x = "", y = "Richesse prédite") +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_x_discrete(drop = FALSE)  # Pour forcer l'affichage de tous les niveaux de degre_fauche
+#dev.off()
+
+#png("tendance_shan_non_pat.png")
+#png("tendance_shan_pat.png")
+ggplot(subset(new_dataH, 
+              transect_paturage_prairie == "Non pâturée"
+              #transect_paturage_prairie == "Pâturée"
+              ),
+              aes(x = degre_fauche, y = fit, group = transect_paturage_prairie)) +
+  geom_line(aes(group = transect_paturage_prairie)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper, fill = ""), alpha = 0.2) +
+  labs(x = "", y = "Indice de Shannon prédit") +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_x_discrete(drop = FALSE)
+#dev.off()
+
+# Pour forcer l'affichage de tous les niveaux de degre_fauche
+
+# Ici c'est la densité prédite pour le niveau "Paturée"
+#png("tendance_dens_pat.png")
+ggplot(subset(new_data, transect_paturage_prairie == "Pâturée"),
+              aes(x = degre_fauche, y = fit, group = transect_paturage_prairie)) +
+  geom_line(aes(group = transect_paturage_prairie)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper, fill = ""), alpha = 0.2) +
+  labs(x = "",
+       y = "Densité prédite") +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_x_discrete(drop = FALSE) # Pour forcer l'affichage de tous les niveaux de degre_fauche
+#dev.off()
+
+# ggplot(new_data, aes(x = degre_fauche, y = fit, group = 1)) +
+#   geom_line(color = "blue") +
+#   geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, fill = "lightblue") +
+#   labs(x = "Degré de fauche", y = "Densité prédite") +
+#   theme_minimal()
+
+```
+```{r}
+new_data
+subset(new_data, transect_paturage_prairie == "Non pâturée")
+```
+
+
++ Moyenne paturage
+```{r}
+
+# Calculer les moyennes par niveau de degre_fauche
+avg_predictions <- new_data %>%
+  group_by(degre_fauche) %>%
+  summarise(fit = mean(fit),
+            se.fit = mean(se.fit),
+            lower = mean(fit) - 1.96 * mean(se.fit),
+            upper = mean(fit) + 1.96 * mean(se.fit))
+
+# Créer le graphique
+ggplot(avg_predictions, aes(x = degre_fauche, y = fit, group=1)) +
+  geom_line(color = "blue") +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, fill = "lightblue") +
+  labs(x = "Degré de fauche", y = "Densité prédite") +
+  theme_minimal()
+```
++ Modèle sans pâturage
+
+
+```{r}
+# Modèle log-linéaire 
+modele.prai.dens.alea.ssesp.sspat <- glmmTMB(logN ~ degre_fauche +
+                                     #transect_paturage_prairie +
+                                     #transect_paturage_prairie:degre_fauche +
+                                     axe1_1000 +
+                                     axe2_1000 +
+                                     #axe1_5000 +
+                                     #axe2_5000 +
+                                     axe1_10000 +
+                                     axe2_10000 +
+                                     #(1|espece) +
+                                     (1|annee) +
+                                     (1|site_id/id_transect) ,
+                                   data = super_table_prai[super_table_prai$NPrai_sp !=0,]
+)
+summary(modele.prai.dens.alea.ssesp.sspat)
+```
+```{r}
+# Créer un nouveau jeu de données pour la prédiction
+new_data <- expand.grid(degre_fauche = unique(table_non_nulle$degre_fauche),
+                        #transect_paturage_prairie = unique(data_densite_sp$transect_paturage_prairie),
+                        #transect_paturage_prairie = "Non pâturée",
+                        axe1_1000 = mean(table_non_nulle$axe1_1000),
+                        axe2_1000 = mean(table_non_nulle$axe2_1000),
+                        #axe2_5000 = mean(table_non_nulle$axe2_5000),
+                        axe1_10000 = mean(table_non_nulle$axe1_10000),
+                        axe2_10000 = mean(table_non_nulle$axe2_10000))
+
+
+# Obtenir les prédictions avec intervalles de confiance sans effets aléatoires
+predictions <- predict(modele.prai.dens.alea.ssesp.sspat, 
+                       newdata = new_data, se.fit = TRUE, 
+                       allow.new.levels=TRUE,
+                       re.form = NA, type = "response")
+
+# Ajouter les prédictions et les intervalles de confiance dans le nouveau jeu de données
+# Rappel : on était en log donc on passe à l'exponentielle!
+new_data$fit <- exp(predictions$fit)
+new_data$se.fit <- exp(predictions$se.fit)
+
+# Calcul des intervalles de confiance
+new_data <- new_data %>%
+  mutate(lower = fit - 1.96 * se.fit,
+         upper = fit + 1.96 * se.fit)
+
+# Créer le graphique
+
+#png("tendance_dens_sans_pat.png")
+ggplot(new_data, aes(x = degre_fauche, y = fit, group = 1)) +
+  geom_line(color = "blue") +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, fill = "lightblue") +
+  labs(x = "Degré de fauche", y = "Densité prédite") +
+  theme_minimal()
+#dev.off()
+```
++ Prédictions pour axe1_1000 et axe2_1000 avec comme ref, non fauché, non paturé
+
+```{r}
+# Définir la plage de valeurs pour axe1_1000
+#axe1_1000_range <- seq(min(data_densite_sp$axe1_1000), max(data_densite_sp$axe1_1000), length.out = 100)
+axe1_1000_range <- seq(-1,1, length.out = 100)
+
+# Créer le jeu de données pour les prédictions
+new_data <- expand.grid(axe1_1000 = axe1_1000_range,
+                        degre_fauche = "0.Non fauchée",  # Fixer à un niveau
+                        transect_paturage_prairie = "Non pâturée",  # Fixer à un niveau
+                        axe2_1000 = mean(data_densite_sp$axe2_1000),
+                        axe1_10000 = mean(data_densite_sp$axe1_10000),
+                        axe2_10000 = mean(data_densite_sp$axe2_10000))
+
+# Créer le jeu de données pour les prédictions, autre level
+new_data_bis <- expand.grid(axe1_1000 = axe1_1000_range,
+                        degre_fauche = "3.Plusieurs fauches",  # Fixer à un niveau
+                        transect_paturage_prairie = "Non pâturée",  # Fixer à un niveau
+                        axe2_1000 = mean(data_densite_sp$axe2_1000),
+                        axe1_10000 = mean(data_densite_sp$axe1_10000),
+                        axe2_10000 = mean(data_densite_sp$axe2_10000))
+
+# Créer le jeu de données pour les prédictions, autre level
+new_data_ter <- expand.grid(axe1_1000 = axe1_1000_range,
+                        degre_fauche = "1.Fauche tardive",  # Fixer à un niveau
+                        transect_paturage_prairie = "Non pâturée",  # Fixer à un niveau
+                        axe2_1000 = mean(data_densite_sp$axe2_1000),
+                        axe1_10000 = mean(data_densite_sp$axe1_10000),
+                        axe2_10000 = mean(data_densite_sp$axe2_10000))
+
+
+# Prédictions
+predictions <- predict(modele.prai.dens.alea.ssesp, newdata = new_data, se.fit = TRUE, allow.new.levels=TRUE, re.form = NA, type = "response")
+
+predictions_bis <- predict(modele.prai.dens.alea.ssesp, newdata = new_data_bis, se.fit = TRUE, allow.new.levels=TRUE, re.form = NA, type = "response")
+
+predictions_ter <- predict(modele.prai.dens.alea.ssesp, newdata = new_data_ter, se.fit = TRUE, allow.new.levels=TRUE, re.form = NA, type = "response")
+
+# Ajouter les prédictions et les intervalles de confiance au jeu de données
+new_data$fit <- exp(predictions$fit)
+new_data$se.fit <- exp(predictions$se.fit)
+new_data <- new_data %>%
+  mutate(lower = fit - 1.96 * se.fit,
+         upper = fit + 1.96 * se.fit)
+
+new_data_bis$fit <- exp(predictions_bis$fit)
+new_data_bis$se.fit <- exp(predictions_bis$se.fit)
+new_data_bis <- new_data_bis %>%
+  mutate(lower = fit - 1.96 * se.fit,
+         upper = fit + 1.96 * se.fit)
+
+new_data_ter$fit <- exp(predictions_ter$fit)
+new_data_ter$se.fit <- exp(predictions_ter$se.fit)
+new_data_ter <- new_data_ter %>%
+  mutate(lower = fit - 1.96 * se.fit,
+         upper = fit + 1.96 * se.fit)
+
+# Créer le jeu de données pour les prédictions
+new_data2 <- expand.grid(axe2_1000 = axe1_1000_range,
+                        degre_fauche = "0.Non fauchée",  # Fixer à un niveau
+                        transect_paturage_prairie = "Non pâturée",  # Fixer à un niveau
+                        axe1_1000 = mean(data_densite_sp$axe1_1000),
+                        axe1_10000 = mean(data_densite_sp$axe1_10000),
+                        axe2_10000 = mean(data_densite_sp$axe2_10000))
+
+# Prédictions2
+predictions <- predict(modele.prai.dens.alea.ssesp, newdata = new_data2, se.fit = TRUE, allow.new.levels=TRUE, re.form = NA, type = "response")
+
+# Ajouter les prédictions et les intervalles de confiance au jeu de données
+new_data2$fit <- exp(predictions$fit)
+new_data2$se.fit <- exp(predictions$se.fit)
+new_data2 <- new_data2 %>%
+  mutate(lower = fit - 1.96 * se.fit,
+         upper = fit + 1.96 * se.fit)
+
+
+ggplot() +
+  geom_line(data = new_data, aes(x = axe1_1000, y = fit, group=1), color = "blue") +
+  geom_line(data = new_data_bis, aes(x = axe1_1000, y = fit, group=1), color = "purple") +
+  geom_line(data = new_data_ter, aes(x = axe1_1000, y = fit, group=1), color = "violetred4") +
+  geom_ribbon(data = new_data, aes(x = axe1_1000, y = fit, ymin = lower, ymax = upper), alpha = 0.2, fill = "lightblue") +
+  geom_ribbon(data = new_data_bis, aes(x = axe1_1000, y = fit, ymin = lower, ymax = upper), alpha = 0.1, fill = "purple") +
+  geom_ribbon(data = new_data_ter, aes(x = axe1_1000, y = fit, ymin = lower, ymax = upper), alpha = 0.1, fill = "violetred4") +
+  labs(x = "Axe 1 (1000m)", y = "Densité prédite") +
+  theme_minimal() 
+
+ggplot(new_data2, aes(x = axe2_1000, y = fit, group=1)) +
+  geom_line(color = "red") +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, fill = "lightcoral") +
+  #labs(x = "Axe 1 (1000m)", y = "Densité prédite") +
+  theme_minimal()
+#png("tendance_1000.png")
+ggplot() +
+  geom_line(data = new_data, aes(x = axe1_1000, y = fit, group=1), color = "blue") +
+  geom_line(data = new_data2, aes(x = axe2_1000, y = fit, group=1), color = "red") +
+  geom_ribbon(data = new_data, aes(x= axe1_1000, ymin = lower, ymax = upper), alpha = 0.2, fill = "lightblue") +
+  geom_ribbon(data = new_data2, aes(x= axe2_1000, ymin = lower, ymax = upper), alpha = 0.2, fill = "lightcoral") +
+  labs(x = "Axe 1 (1000m)", y = "Densité prédite") +
+  theme_minimal()
+#dev.off()
+# ggplot(new_data2, aes(x = axe2_1000, y = fit, group=1)) +
+#   geom_line(color = "red") +
+#   geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, fill = "lightcoral") +
+#   #labs(x = "Axe 1 (1000m)", y = "Densité prédite") +
+#   theme_minimal()
+
+```
++ Prédictions pour axe1_10000 et axe2_10000 avec comme ref, non fauché, non paturé
+
+
+```{r}
+# Définir la plage de valeurs pour axe1_1000
+#axe1_1000_range <- seq(min(data_densite_sp$axe1_1000), max(data_densite_sp$axe1_1000), length.out = 100)
+axe1_1000_range <- seq(-1,1, length.out = 100)
+
+# Créer le jeu de données pour les prédictions
+new_data <- expand.grid(axe1_10000 = axe1_1000_range,
+                        degre_fauche = "0.Non fauchée",  # Fixer à un niveau
+                        transect_paturage_prairie = "Non pâturée",  # Fixer à un niveau
+                        axe2_1000 = mean(data_densite_sp$axe2_1000),
+                        axe1_1000 = mean(data_densite_sp$axe1_1000),
+                        axe2_10000 = mean(data_densite_sp$axe2_10000))
+
+
+# Prédictions
+predictions <- predict(modele.prai.dens.alea.ssesp, newdata = new_data, se.fit = TRUE, allow.new.levels=TRUE, re.form = NA, type = "response")
+
+# Ajouter les prédictions et les intervalles de confiance au jeu de données
+new_data$fit <- predictions$fit
+new_data$se.fit <- predictions$se.fit
+new_data <- new_data %>%
+  mutate(lower = fit - 1.96 * se.fit,
+         upper = fit + 1.96 * se.fit)
+
+# Créer le jeu de données pour les prédictions
+new_data2 <- expand.grid(axe2_10000 = axe1_1000_range,
+                        degre_fauche = "0.Non fauchée",  # Fixer à un niveau
+                        transect_paturage_prairie = "Non pâturée",  # Fixer à un niveau
+                        axe1_1000 = mean(data_densite_sp$axe1_1000),
+                        axe1_10000 = mean(data_densite_sp$axe1_10000),
+                        axe2_1000 = mean(data_densite_sp$axe2_1000))
+# Prédictions2
+predictions <- predict(modele.prai.dens.alea.ssesp, newdata = new_data2, se.fit = TRUE, allow.new.levels=TRUE, re.form = NA, type = "response")
+
+# Ajouter les prédictions et les intervalles de confiance au jeu de données
+new_data2$fit <- predictions$fit
+new_data2$se.fit <- predictions$se.fit
+new_data2 <- new_data2 %>%
+  mutate(lower = fit - 1.96 * se.fit,
+         upper = fit + 1.96 * se.fit)
+
+
+ggplot(new_data, aes(x = axe1_10000, y = fit, group=1)) +
+  geom_line(color = "blue") +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, fill = "lightblue") +
+  labs(x = "Axe 1 (1000m)", y = "Densité prédite") +
+  theme_minimal()
+
+ggplot(new_data2, aes(x = axe2_10000, y = fit, group=1)) +
+  geom_line(color = "red") +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, fill = "lightcoral") +
+  #labs(x = "Axe 1 (1000m)", y = "Densité prédite") +
+  theme_minimal()
+```
++ Modèle richesse
+
+
+```{r}
+# Modèle log-linéaire 
+modele.prai.S.alea.ssesp.sspat <- glmmTMB(SPrai_sp ~ degre_fauche +
+                                     #transect_paturage_prairie +
+                                     #transect_paturage_prairie:degre_fauche +
+                                     axe1_1000 +
+                                     axe2_1000 +
+                                     #axe1_5000 +
+                                     #axe2_5000 +
+                                     axe1_10000 +
+                                     axe2_10000 +
+                                     #(1|espece) +
+                                     (1|annee) +
+                                     (1|site_id/id_transect) ,
+                                   data = super_table_prai[super_table_prai$NPrai_sp !=0,],
+                                   family = "poisson"
+)
+summary(modele.prai.S.alea.ssesp.sspat)
+```
+```{r}
+# Créer un nouveau jeu de données pour la prédiction
+new_data <- expand.grid(degre_fauche = unique(table_non_nulle$degre_fauche),
+                        #transect_paturage_prairie = unique(data_densite_sp$transect_paturage_prairie),
+                        #transect_paturage_prairie = "Non pâturée",
+                        axe1_1000 = mean(table_non_nulle$axe1_1000),
+                        axe2_1000 = mean(table_non_nulle$axe2_1000),
+                        #axe2_5000 = mean(table_non_nulle$axe2_5000),
+                        axe1_10000 = mean(table_non_nulle$axe1_10000),
+                        axe2_10000 = mean(table_non_nulle$axe2_10000))
+
+
+# Obtenir les prédictions avec intervalles de confiance sans effets aléatoires
+predictions <- predict(modele.prai.S.alea.ssesp.sspat, newdata = new_data, se.fit = TRUE,allow.new.levels=TRUE, re.form = NA, type = "response")
+
+# Ajouter les prédictions et les intervalles de confiance dans le nouveau jeu de données
+new_data$fit <- predictions$fit
+new_data$se.fit <- predictions$se.fit
+
+# Calcul des intervalles de confiance
+new_data <- new_data %>%
+  mutate(lower = fit - 1.96 * se.fit,
+         upper = fit + 1.96 * se.fit)
+
+# Créer le graphique
+
+#png("tendance_rich_sans_pat.png")
+ggplot(new_data, aes(x = degre_fauche, y = fit, group = 1)) +
+  geom_line(color = "blue") +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, fill = "lightblue") +
+  labs(x = "Degré de fauche", y = "Richesse prédite") +
+  theme_minimal()
+#dev.off()
+```
++ Shannon?
+
+```{r}
+# Modèle log-linéaire 
+modele.prai.H.alea.ssesp.sspat <- glmmTMB(HPrai_sp ~ degre_fauche +
+                                     #transect_paturage_prairie +
+                                     #transect_paturage_prairie:degre_fauche +
+                                     axe1_1000 +
+                                     axe2_1000 +
+                                     #axe1_5000 +
+                                     #axe2_5000 +
+                                     axe1_10000 +
+                                     axe2_10000 +
+                                     #(1|espece) +
+                                     (1|annee) +
+                                     (1|site_id/id_transect) ,
+                                   data = super_table_prai[super_table_prai$NPrai_sp !=0,]
+                                  # ,family = "poisson"
+)
+summary(modele.prai.H.alea.ssesp.sspat)
+```
+```{r}
+# Créer un nouveau jeu de données pour la prédiction
+new_data <- expand.grid(degre_fauche = unique(table_non_nulle$degre_fauche),
+                        #transect_paturage_prairie = unique(data_densite_sp$transect_paturage_prairie),
+                        #transect_paturage_prairie = "Non pâturée",
+                        axe1_1000 = mean(table_non_nulle$axe1_1000),
+                        axe2_1000 = mean(table_non_nulle$axe2_1000),
+                        #axe2_5000 = mean(table_non_nulle$axe2_5000),
+                        axe1_10000 = mean(table_non_nulle$axe1_10000),
+                        axe2_10000 = mean(table_non_nulle$axe2_10000))
+
+
+# Obtenir les prédictions avec intervalles de confiance sans effets aléatoires
+predictions <- predict(modele.prai.H.alea.ssesp.sspat, newdata = new_data, se.fit = TRUE,allow.new.levels=TRUE, re.form = NA, type = "response")
+
+# Ajouter les prédictions et les intervalles de confiance dans le nouveau jeu de données
+new_data$fit <- predictions$fit
+new_data$se.fit <- predictions$se.fit
+
+# Calcul des intervalles de confiance
+new_data <- new_data %>%
+  mutate(lower = fit - 1.96 * se.fit,
+         upper = fit + 1.96 * se.fit)
+
+# Créer le graphique
+
+#png("tendance_rich_sans_pat.png")
+ggplot(new_data, aes(x = degre_fauche, y = fit, group = 1)) +
+  geom_line(color = "blue") +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, fill = "lightblue") +
+  labs(x = "Degré de fauche", y = "Indice de Shannon prédit") +
+  theme_minimal()
+#dev.off()
+```
+
+###### Aparté pour table lat long
+
+```{r}
+coord <- read.csv("propage_pays/coord_propage.csv")
+coord
+```
+
+```{r}
+# je ne garde que le dernier point moyen si le transect a été défini plusieurs fois 
+coords_unique <- coord |>
+  group_by(id_transect) |>
+  summarise_at(vars(long, lat), last)
+  
+```
+
+```{r}
+table_non_nulle <- table_non_nulle |>
+  left_join(coords_unique, by = "id_transect")
+```
+
+```{r}
+length(unique(table_non_nulle$id_transect))
+```
+
+```{r}
+table_non_nulle <- as.data.frame(table_non_nulle)
+```
+
+
+```{r}
+#autocorrélation spatiale?
+sims_grouped3.2 <- recalculateResiduals(simul1.1, group = unique(table_non_nulle$id_transect))
+Data_grouped <- unique(table_non_nulle[,c("long","lat")])
+testSpatialAutocorrelation(sims_grouped3.2, x = Data_grouped$lat, y = Data_grouped$long)
+```
+
+```{r}
+colnames(table_non_nulle)
+```
+
+### V.3. Modèles avec effets aléatoires site et année ET espèce [table longue]
+
++ Table longue 
+
+```{r}
+data_densite_sp$logN <- log(data_densite_sp$densite)
+```
+
+#### a. Sans le semis_sursemis
+
+
+##### Densité
+
+
+```{r}
+data_densite_sp
+```
+
+```{r}
+nrow(data_densite_sp)
+summary(data_densite_sp)
+```
+
+
+```{r}
+# Modèle densité
+modele.prai.dens.1.1 <- glmmTMB(densite ~ degre_fauche +
+                                  transect_paturage_prairie +
+                                  transect_paturage_prairie*degre_fauche +
+                                  axe1_1000 +
+                                  axe2_1000 +
+                                  #axe1_5000 +
+                                  #axe2_5000 +
+                                  axe1_10000 +
+                                  axe2_10000 +
+                                  (1|espece) +
+                                  (1|annee) +
+                                  (1|site_id/id_transect) 
+                                ,
+                                data = data_densite_sp
+)
+summary(modele.prai.dens.1.1)
+
+```
+```{r}
+# Résidus
+simul1.1 <- simulateResiduals(modele.prai.dens.1.1)
+plot(simul1.1)
+
+# performance
+model_performance(modele.prai.dens.1.1)
+check_overdispersion(modele.prai.dens.1.1)
+check_autocorrelation(modele.prai.dens.1.1)
+check_collinearity(modele.prai.dens.1.1)
+```
+```{r}
+Anova(modele.prai.dens.1.1)
+```
+
+
+##### log-Densité où densité ≠ 0
+
+
+```{r}
+nrow(data_densite_sp[data_densite_sp$densite != 0,])
+```
+
+
+```{r}
+# Modèle log-Densité
+modele.prai.dens.2.1 <- glmmTMB(logN ~ degre_fauche +
+                                  transect_paturage_prairie +
+                                  transect_paturage_prairie:degre_fauche +
+                                  axe1_1000 +
+                                  axe2_1000 +
+                                  #axe1_5000 +
+                                  #axe2_5000 +
+                                  axe1_10000 +
+                                  axe2_10000 +
+                                  (1|espece) +
+                                  (1|annee) +
+                                  (1|site_id/id_transect) 
+                                ,
+                                data = data_densite_sp[data_densite_sp$densite != 0,]
+                                #data = data_densite_sp
+)
+summary(modele.prai.dens.2.1)
+```
+```{r}
+# Résidus
+simul2.1 <- simulateResiduals(modele.prai.dens.2.1)
+#summary(simul2.1)
+
+png("residus_NPrai_sp.png", width = 800, height = 500)
+plot(simul2.1)
+dev.off()
+
+# performance
+model_performance(modele.prai.dens.2.1)
+check_overdispersion(modele.prai.dens.2.1)
+check_autocorrelation(modele.prai.dens.2.1)
+check_collinearity(modele.prai.dens.2.1)
+```
+```{r}
+Anova(modele.prai.dens.2.1)
+```
+```{r}
+library(xtable)
+xtable(Anova(modele.prai.dens.2.1))
+```
+
+```{r}
+#autocorrélation spatiale 
+sims_grouped <- recalculateResiduals(simul2.1, group = unique(data_densite_sp[data_densite_sp$densite != 0,]$id_transect))
+Data_grouped <- unique(data_densite_sp[data_densite_sp$densite != 0,][,c("long","lat")])
+testSpatialAutocorrelation(sims_grouped, x = Data_grouped$lat, y = Data_grouped$long)
+```
+
+
+##### sans effet aléa espèce, log-Densité où densité ≠ 0
+
+```{r}
+# Modèle log-Densité
+modele.prai.dens.2.2 <- glmmTMB(logN ~ degre_fauche +
+                                  transect_paturage_prairie +
+                                  transect_paturage_prairie*degre_fauche +
+                                  axe1_1000 +
+                                  axe2_1000 +
+                                  #axe1_5000 +
+                                  axe2_5000 +
+                                  axe1_10000 +
+                                  axe2_10000 +
+                                  #(1|espece) +
+                                  (1|annee) +
+                                  (1|site_id/id_transect) 
+                                ,
+                                data = data_densite_sp[data_densite_sp$densite != 0,]
+                                #data = data_densite_sp
+)
+summary(modele.prai.dens.2.2)
+```
+```{r}
+# Résidus
+simul2.2 <- simulateResiduals(modele.prai.dens.2.2)
+#summary(simul2.1)
+plot(simul2.2)
+
+# performance
+model_performance(modele.prai.dens.2.2)
+check_overdispersion(modele.prai.dens.2.2)
+check_autocorrelation(modele.prai.dens.2.2)
+check_collinearity(modele.prai.dens.2.2)
+```
+
+```{r}
+#autocorrélation spatiale?
+sims_grouped2 <- recalculateResiduals(simul2.2, group = unique(data_densite_sp[data_densite_sp$densite != 0,]$id_transect))
+Data_grouped <- unique(data_densite_sp[data_densite_sp$densite != 0,][,c("long","lat")])
+testSpatialAutocorrelation(sims_grouped2, x = Data_grouped$lat, y = Data_grouped$long)
+```
+
+```{r}
+Anova(modele.prai.dens.2.2)
+```
+#### b. Avec le semis_sursemis
+
+```{r}
+# table de semis_sursemis
+data_sp_semis <- subset(data_densite_sp, densite != 0 & semis_sursemis != "Je ne sais pas")
+data_sp_semis
+```
+
+##### log_densité 
+
+```{r}
+# Modèle log-Densité
+modele.prai.dens.3.1 <- glmmTMB(logN ~ 
+                                  degre_fauche +
+                                  transect_paturage_prairie +
+                                  semis_sursemis + 
+                                  transect_paturage_prairie*degre_fauche +
+                                  transect_paturage_prairie*semis_sursemis +
+                                  #degre_fauche*semis_sursemis +
+                                  axe1_1000 +
+                                  axe2_1000 +
+                                  #axe2_5000 +
+                                  axe1_10000 +
+                                  axe2_10000 +
+                                  (1|espece) +
+                                  (1|annee) +
+                                  (1|site_id/id_transect) 
+                                ,
+                                data = data_sp_semis
+)
+summary(modele.prai.dens.3.1)
+```
+
+```{r}
+# Résidus
+simul3.1 <- simulateResiduals(modele.prai.dens.3.1)
+plot(simul3.1)
+
+# performance
+model_performance(modele.prai.dens.3.1)
+check_overdispersion(modele.prai.dens.3.1)
+check_autocorrelation(modele.prai.dens.3.1)
+check_heteroscedasticity(modele.prai.dens.3.1)
+check_collinearity(modele.prai.dens.3.1)
+```
+```{r}
+Anova(modele.prai.dens.3.1)
+```
+```{r}
+#autocorrélation spatiale?
+sims_grouped3.1 <- recalculateResiduals(simul3.1, group = unique(data_sp_semis$id_transect))
+Data_grouped <- unique(data_sp_semis[,c("long","lat")])
+testSpatialAutocorrelation(sims_grouped3.1, x = Data_grouped$lat, y = Data_grouped$long)
+```
+##### sans effet alea espece [penser à changer de dataframe]
+
+```{r}
+super_table_prai_semis <- subset(super_table_prai, semis_sursemis != "Je ne sais pas")
+super_table_prai_semis_log <- subset(super_table_prai_semis, NPrai_sp !=0)
+super_table_prai_semis_log
+```
+###### Aparté pour table lat long
+```{r}
+coord <- read.csv("propage_pays/coord_propage.csv")
+coord
+```
+
+```{r}
+# je ne garde que le dernier point moyen si le transect a été défini plusieurs fois 
+coords_unique <- coord |>
+  group_by(id_transect) |>
+  summarise_at(vars(long, lat), last)
+  
+```
+
+```{r}
+super_table_prai_semis_log <- super_table_prai_semis_log |>
+  left_join(coords_unique, by = "id_transect")
+```
+
+```{r}
+#table_user_site
+user_unique <- table_user_site |>
+  group_by(id_transect) |>
+  summarise_at(vars(user_id), last)
+user_unique
+```
+```{r}
+super_table_prai_semis_log <- super_table_prai_semis_log |>
+  left_join(user_unique, by = "id_transect") 
+  
+```
+
+```{r}
+super_table_prai_semis_log <- super_table_prai_semis_log |>
+  left_join(select(data, id_transect, site_code_postal, site_departement), by='id_transect') 
+```
+```{r}
+super_table_prai_semis_log <- super_table_prai_semis_log |> unique()
+
+```
+
+
+###### fin aparté
+
+```{r}
+# Modèle log-Densité
+modele.prai.dens.3.2 <- glmmTMB(logN ~ degre_fauche +
+                                  transect_paturage_prairie +
+                                  semis_sursemis + 
+                                  transect_paturage_prairie:degre_fauche +
+                                  transect_paturage_prairie:semis_sursemis +
+                                  #semis_sursemis:degre_fauche +
+                                  axe1_1000 +
+                                  axe2_1000 +
+                                  axe1_10000 +
+                                  axe2_10000 +
+                                  #s(lat, long, bs="tp")+
+                                  #poly(lat, 2)+
+                                 # poly(long,2) +
+                                  (1| annee) +
+                                  (1| site_id/id_transect) 
+                                  #(1 | site_departement/site_code_postal/site_id/id_transect) 
+                                  #(1 | site_code_postal)
+                                ,
+                                 #spatial = list(formula = ~ lat + long, type = "exponential"),
+                                #data = data_sp_semis
+                                data = super_table_prai_semis_log
+)
+summary(modele.prai.dens.3.2)
+```
+
+
+```{r}
+# Résidus
+simul3.2 <- simulateResiduals(modele.prai.dens.3.2)
+
+# Enregistrer au format PNG
+p <- plot(simul3.2)
+#ggsave("plot_Dh_Prai_dens.png", p)
+
+# performance
+model_performance(modele.prai.dens.3.2)
+check_convergence(modele.prai.dens.3.2)
+check_overdispersion(modele.prai.dens.3.2)
+check_autocorrelation(modele.prai.dens.3.2)
+check_heteroscedasticity(modele.prai.dens.3.2)
+check_collinearity(modele.prai.dens.3.2)
+```
+```{r}
+Anova(modele.prai.dens.3.2)
+```
+```{r}
+#autocorrélation spatiale?
+sims_grouped3.2 <- recalculateResiduals(simul3.2, group = unique(data_sp_semis$id_transect))
+Data_grouped <- unique(data_sp_semis[,c("long","lat")])
+testSpatialAutocorrelation(sims_grouped3.2, x = Data_grouped$lat, y = Data_grouped$long)
+```

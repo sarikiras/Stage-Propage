@@ -1,0 +1,1831 @@
+---
+title: "Prairies corrigées 15 ans tests stats sans les zéros"
+author: "Sariaka Ramialison"
+date: "2024-07-08"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::read_chunk("Prairies_corrigees.Rmd")
+```
+
+
+```{r}
+library(ggpubr)
+library(rstatix)
+library(dunn.test)# pour le dunnTest
+library(glmmTMB)
+#library(MASS) # pour le glm.nb
+library(conflicted)
+library(latex2exp)
+```
+
+
+```{r}
+conflicts_prefer(dplyr::summarise)
+conflicts_prefer(dplyr::rename)
+```
+
+Dans ce document, l'id de base et `ìd_transect_annee`.
+
+On a filtré les transects pour lesquels:
+- les relevés sont effectués à + ou - 15 jours des dates recommandées
+- les relevés ont une durée comprise entre 5 min et 20 min
+- on a eu  3 relevés 
+
+Rappel des noms de table:
+`super_div_prai_tot_d0`
+`super_div_prai_tot_sp_d0`
+
+Nouvelles tables sans 0
+
+```{r}
+super_div_prai_tot_d0 <- super_div_prai_tot_d |>
+  filter(NPrai_t !=0)
+super_div_prai_tot_sp_d0 <- super_div_prai_tot_sp_d |>
+  filter(NPrai_sp !=0)
+```
+
+```{r}
+super_div_prai_tot_sp_d0 <- super_div_prai_tot_sp_d0 |>
+  mutate(degre_fauche = case_when(
+    transect_rythme_fauchage_prairie == "Plusieurs fauches" ~ "3.Plusieurs fauches",
+    transect_rythme_fauchage_prairie == "Fauche précoce" ~ "2.Fauche précoce",
+    transect_rythme_fauchage_prairie == "Fauche tardive" ~ "1.Fauche tardive",
+    transect_rythme_fauchage_prairie == "Non fauchée" ~ "0.Non fauchée",
+  )) |>
+  mutate(degre_fauche = as.factor(degre_fauche)) |>
+  mutate (densité = NPrai_sp) |>
+  mutate(semis_sursemis = as.factor(semis_sursemis)) |>
+  mutate(transect_paturage_prairie = as.factor(transect_paturage_prairie))
+```
+
+#Influence des pratiques de gestion
+
+## I. Fauche
+
++ Table fauche
+
+```{r}
+table_F_dens <- super_div_prai_tot_d0 |>
+  group_by(transect_rythme_fauchage_prairie) |>
+  summarise(n=n()) |>
+  as.data.frame()
+table_F_dens
+```
+Ok c'est bon s'il y a des t-tests à faire 
+
+
+### I.1 Test fauche / densité
+
++ Graphique
+
+```{r}
+plot1 <- super_div_prai_tot_d0 |>
+  ggplot(aes(x=transect_rythme_fauchage_prairie, y=NPrai_t, fill=transect_rythme_fauchage_prairie)) + 
+  geom_boxplot(show.legend = FALSE) +
+  geom_hline(yintercept = mean(super_div_prai_tot_d0$NPrai_t), color='red') +
+  geom_text(data = table_F_dens,
+            aes(label = paste("n =", n)), # Affichage de l'effectif au-dessus des boxplots
+            x = table_F_dens$transect_rythme_fauchage_prairie,
+            y = Inf ,
+            vjust = 0.9,
+            size = 3
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 11)) +
+  labs(x = "Rythme fauchage prairie",
+       y = "Densité", 
+       title = paste("Densité et rythme fauche \nEspèces/Morphogroupes \nNb transects =",
+                     nrow(super_div_prai_tot_d0)), 
+       fill="") 
+
+plot2 <- super_div_prai_tot_sp_d0 |>
+  ggplot(aes(x=transect_rythme_fauchage_prairie, y=NPrai_sp, fill=transect_rythme_fauchage_prairie)) + 
+  geom_boxplot(show.legend = FALSE) +
+  geom_hline(yintercept = mean(super_div_prai_tot_sp_d0$NPrai_sp), color='red') +
+  geom_text(data = table_F_dens,
+            aes(label = paste("n =", n)), # Affichage de l'effectif au-dessus des boxplots
+            x = table_F_dens$transect_rythme_fauchage_prairie,
+            y = Inf ,
+            vjust = 0.9,
+            size = 3
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size =11)) +
+  labs(x = "Rythme fauchage prairie", 
+       y = "Densité", 
+       title = paste("Densité et rythme fauche \nEspèces \nNb transects =",
+                     nrow(super_div_prai_tot_sp_d0)), 
+       fill="") 
+
+
+grid.arrange(top = " " ,  plot1, plot2, ncol = 2)
+```
+```{r}
+ggplot(super_div_prai_tot_d0, 
+       aes(x=NPrai_t, group=transect_rythme_fauchage_prairie, color=transect_rythme_fauchage_prairie)) +
+    geom_density()
+```
+
+##### 1. Espèces et morphogroupes
+
+Rappel : on a vu dans le fichier `Prairie_corr.Rmd` que la densité (+1) suivait une loi log-normale pour les Espèces
+On a créé une colonne log(NPrai_t + 1)
+
+```{r}
+modele_rythme_t <- glm(NPrai_t ~ transect_rythme_fauchage_prairie, 
+                        data = super_div_prai_tot_d0)
+
+summary(modele_rythme_t)
+```
+Peut-on faire une anova sur ce modèle?
+
++ Vérification des conditions 
+
+```{r}
+# Créer un QQ plot des résidus
+ggqqplot(residuals(modele_rythme_t))
+
+# Faire un test de Shapiro des résidus
+shapiro_test(residuals(modele_rythme_t))
+
+plot(residuals(modele_rythme_t))
+
+# Faire un test de Levene pour l'homoscédasticité
+# super_div_prai_tot_d0 |>
+#   levene_test(log_NPrai_t ~ transect_rythme_fauchage_prairie)
+# 
+# plot(modele_rythme_t,1)
+```
+Test de levene significatif = pas d'homogénéité de la variance!!
+
+
++ Dunn Test
+
+```{r}
+dunn.test(super_div_prai_tot_d0$NPrai_t, super_div_prai_tot_d0$transect_rythme_fauchage_prairie )
+```
+
+
++ ANOVA Welch à un facteur
+
+```{r}
+res.aov.ft <- super_div_prai_tot_d0 |>
+  as.data.frame() |>
+  welch_anova_test(log_NPrai_t ~ transect_rythme_fauchage_prairie)
+res.aov.ft
+```
+Test de Welch significatif. Effet significatif du rythme de fauche sur la log-densité.
+
++ Test post-hoc
+
+Comme on n'a pas de significativité, on fait Games-Howell ou T-test par paires
+
+```{r}
+# Comparaisons par paires (Games-Howell)
+# pwc <- super_div_prai_tot_d0 |>
+#   games_howell_test(log_NPrai_t ~ transect_rythme_fauchage_prairie)
+# pwc
+
+```
+Différence significative sur Plusieurs fauches avec Fauche tardive et non fauchée
+
+
+##### 2. Espèces 
+
+
+```{r}
+modele_rythme_sp <- lm(NPrai_sp ~ transect_rythme_fauchage_prairie, 
+                      data = super_div_prai_tot_sp_d0)
+
+summary(modele_rythme_sp)
+```
+
+```{r}
+dunn.test(super_div_prai_tot_sp_d0$NPrai_sp, super_div_prai_tot_sp_d0$transect_rythme_fauchage_prairie )
+```
+
+
+Peut-on faire une anova sur ce modèle?
+
++ Vérification des conditions 
+
+```{r}
+# Créer un QQ plot des résidus
+ggqqplot(residuals(modele_rythme_sp))
+
+# Faire un test de Shapiro des résidus
+shapiro_test(residuals(modele_rythme_sp))
+
+plot(residuals(modele_rythme_sp))
+
+#Faire un test de Levene pour l'homoscédasticité
+super_div_prai_tot_sp_d0 |>
+  levene_test(NPrai_sp ~ transect_rythme_fauchage_prairie)
+
+# plot(modele_rythme_sp,1)
+```
+
++ Non normalité, on fait Kruskall-Wallis
+
+```{r}
+res.kw.fsp <- super_div_prai_tot_sp_d0 |>
+  kruskal_test(NPrai_sp ~ transect_rythme_fauchage_prairie)
+res.kw.fsp
+```
+Effet significatif des la fauche sur l'abondance
+
+```{r}
+# importance de l'effet?
+super_div_prai_tot_sp_d0 |>
+  as.data.frame() |>
+  kruskal_effsize(NPrai_sp ~ transect_rythme_fauchage_prairie)
+```
++ test post-hoc car effet significatif : correction de Dunn
+
+
+```{r}
+# Test post-hoc 
+# Correction de Dunn [s'utilise même si les données ne suivent pas une loi normale]
+res.dunn.fsp <- dunn_test (NPrai_sp ~ transect_rythme_fauchage_prairie, 
+                         data = as.data.frame(super_div_prai_tot_sp_d0),
+                         p.adjust.method = "bonferroni")
+res.dunn.fsp
+```
+Différence significative de plusieurs fauches VS Fauche précoce/Fauche tardive/ Non fauchée
+
+```{r}
+pwc <- super_div_prai_tot_sp_d0 |>
+  as.data.frame() |>
+  dunn_test( NPrai_sp ~ degre_fauche, p.adjust.method = "bonferroni")
+pwc
+```
+```{r}
+library(ggpubr)
+```
+
+
+
++ Rapport des résultats
+
+```{r}
+library(latex2exp)
+
+pwc <- pwc |>
+  add_xy_position(x = "degre_fauche", step.increase = 0.1)
+
+plotKS_fauche <- ggboxplot(super_div_prai_tot_sp_d0,
+          x = "degre_fauche",
+          y = "NPrai_sp") +
+  stat_pvalue_manual(pwc, hide.ns = TRUE) +
+  # geom_hline(yintercept = mean(super_div_prai_tot_sp_d0$NPrai_sp),
+  #            linetype = 2, 
+  #            color = "red") +
+  labs(x ="",
+       y= TeX(r'(densité ($m^2$))'),
+       subtitle = get_test_label(res.kw.fsp, detailed = TRUE),
+       caption = get_pwc_label(pwc)
+       )
+plotKS_fauche
+#ggsave(filename = "plotKS_fauche.png", plotKS_fauche)
+```
+
+
+###### Test anova pour la log densité
+
+
++ Test ANOVA pour les espèces
+
+
+```{r}
+anova_rythme_sp <- aov(log_NPrai_sp ~ transect_rythme_fauchage_prairie, data = super_div_prai_tot_sp_d0)
+summary(anova_rythme_sp)
+```
++ vérification des hypothèses
+
+```{r}
+model.fauche <- lm(log_NPrai_sp ~ transect_rythme_fauchage_prairie, data = super_div_prai_tot_sp_d0)
+plot(model.fauche,1)
+plot(model.fauche,2)
+plot(residuals(model.fauche))
+shapiro_test(residuals(model.fauche))
+levene_test(super_div_prai_tot_sp_d0, log_NPrai_sp ~ transect_rythme_fauchage_prairie )
+```
+
+
++ Test ANOVA pour les espèces et morphogroupes 
+
+```{r}
+anova_rythme_t <- aov(NPrai_t ~ transect_rythme_fauchage_prairie, data = super_div_prai_tot_d0)
+summary(anova_rythme_t)
+```
+
+### I.2  Test fauche richesse
+
++ Graphique
+
+```{r}
+plot1 <- super_div_prai_tot_d0 |>
+  ggplot(aes(x=transect_rythme_fauchage_prairie, y=SPrai_t, fill=transect_rythme_fauchage_prairie)) + 
+  geom_boxplot(show.legend = FALSE) +
+  geom_hline(yintercept = mean(super_div_prai_tot_d0$SPrai_t), color='red') +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Rythme fauchage prairie", y = "Richesse", title = "Richesse spécifique et fauche \nEspèces et Groupes", fill="") 
+
+plot2 <- super_div_prai_tot_sp_d0 |>
+  ggplot(aes(x=transect_rythme_fauchage_prairie, y=SPrai_sp, fill=transect_rythme_fauchage_prairie)) + 
+  geom_boxplot(show.legend = FALSE) +
+  geom_hline(yintercept = mean(super_div_prai_tot_sp_d0$SPrai_sp), color='red') +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Rythme fauchage prairie", y = "Richesse", title = "Richesse spécifique et fauche \nEspèces", fill="") 
+
+grid.arrange(top = " " ,  plot1, plot2, ncol = 2)
+
+```
+
+#### 1. Espèces et morphogroupes
+
+```{r}
+# on fait un modèle de Poisson
+model_S_rythme_t <- glm(SPrai_t ~ transect_rythme_fauchage_prairie, 
+                      data = super_div_prai_tot_d0,
+                      family = "poisson")
+summary(model_S_rythme_t)
+```
+```{r}
+# modele 2 : on fait un modèle binomial negative
+# library(MASS)
+# model_S_rythme_t_nb <- glm.nb(SPrai_t ~ transect_rythme_fauchage_prairie, 
+#                       data = super_div_prai_tot_d0)
+# summary(model_S_rythme_t_nb)
+```
+
+Peut on faire une Anova sur ce modèle?
+
++ Vérification des conditions sur le modele Poisson
+
+```{r}
+# Créer un QQ plot des résidus
+ggqqplot(residuals(model_S_rythme_t))
+
+# Faire un test de Shapiro des résidus
+shapiro_test(residuals(model_S_rythme_t))
+
+plot(residuals(model_S_rythme_t))
+
+# Faire un test de Levene pour l'homoscédasticité
+super_div_prai_tot_d0 |>
+  levene_test(SPrai_t ~ transect_rythme_fauchage_prairie)
+
+plot(model_S_rythme_t,1)
+```
+
+Pas de normalité, mais homoscédasticité.
+
++ Test Kruskall_Wallis pour les espèces et morphogroupes 
+
+```{r}
+super_div_prai_tot_d0 |>
+  as.data.frame() |>
+  kruskal_test(SPrai_t ~ transect_rythme_fauchage_prairie)
+super_div_prai_tot_d0 |>
+  as.data.frame() |>
+  kruskal_effsize(SPrai_t ~ transect_rythme_fauchage_prairie)
+```
+Effet significatif de la fauche sur la richesse
+
++ Tests d'anova quand même car homoscédasticité (robustesse d'anova)
+
+```{r}
+anova(model_S_rythme_t, test = "Chisq")  # test du rapport de vraisemblance
+```
+On retrouve l'effet significatif de la fauche sur la richesse
+
++ Test post-hoc
+
+```{r}
+super_div_prai_tot_d0 |>
+  tukey_hsd(SPrai_t ~ transect_rythme_fauchage_prairie)
+```
+Différence significative entre Plusieurs fauchées et Fauche tardive ou non fauchée
+
+#### 2. Espèces 
+
+```{r}
+# on fait un modèle negative binomial
+model_S_rythme_sp <- glmmTMB(SPrai_sp ~ transect_rythme_fauchage_prairie, 
+                      data = super_div_prai_tot_sp_d0,
+                      family = nbinom2)
+summary(model_S_rythme_sp)
+```
+```{r}
+# modele 2 : on fait un modèle binomial negative
+# model_S_rythme_sp_nb <- glm.nb(SPrai_sp ~ transect_rythme_fauchage_prairie, 
+#                       data = super_div_prai_tot_sp_d0)
+# summary(model_S_rythme_sp_nb)
+```
+
+```{r}
+library(performance)
+check_overdispersion(model_S_rythme_sp)
+```
+
+Peut on faire une Anova sur ce modèle?
+
++ Vérification des conditions sur le modele Poisson
+
+```{r}
+# Créer un QQ plot des résidus
+ggqqplot(residuals(model_S_rythme_sp))
+
+# Faire un test de Shapiro des résidus
+shapiro_test(residuals(model_S_rythme_sp))
+
+plot(residuals(model_S_rythme_sp))
+
+# Faire un test de Levene pour l'homoscédasticité
+super_div_prai_tot_sp_d0 |>
+  levene_test(SPrai_sp ~ transect_rythme_fauchage_prairie)
+
+#plot(model_S_rythme_sp,1)
+```
+
+Pas de normalité des résidus, ni d'homogénéité des variances 
+
+
+```{r}
+modele_poisson <- glm(SPrai_sp ~ transect_rythme_fauchage_prairie, 
+                      data = super_div_prai_tot_sp_d0,
+                   family = "poisson")
+ggqqplot(residuals(modele_poisson))
+shapiro_test(residuals(modele_poisson))
+```
+
++ Test Krukal-Wallis
+
+
+```{r}
+res.kw.fsp.S <- super_div_prai_tot_sp_d0 |>
+  as.data.frame() |>
+  kruskal_test(SPrai_sp ~ degre_fauche)
+res.kw.fsp.S
+super_div_prai_tot_sp_d0 |>
+  as.data.frame() |>
+  kruskal_effsize(SPrai_sp ~ degre_fauche)
+```
+Significativité : effet du rythme de fauche sur la richesse
+
++ Test post-hoc Correction de Dunn
+
+```{r}
+pwc2 <- super_div_prai_tot_sp_d0 |>
+  as.data.frame() |>
+  dunn_test(SPrai_sp ~ degre_fauche, p.adjust.method = "bonferroni")
+pwc2
+```
+Comme précédemment, différence signifiactive entre Plusieurs fauches et Fauche tardive ou Non fauchée Fauche précoce.
+
++ Rapport 
+
+```{r}
+pwc2 <- pwc2 |>
+  add_xy_position(x = "degre_fauche", step.increase = 0.1)
+
+plotKS_fauche_S <- ggboxplot(super_div_prai_tot_sp_d0,
+          x = "degre_fauche",
+          y = "SPrai_sp") +
+  stat_pvalue_manual(pwc2, hide.ns = TRUE) +
+  # geom_hline(yintercept = mean(super_div_prai_tot_sp_d0$SPrai_sp),
+  #            linetype = 2, 
+  #            color = "red") +
+  labs(x ="",
+       y="richesse spécifique",
+       subtitle = get_test_label(res.kw.fsp.S, detailed = TRUE),
+       caption = get_pwc_label(pwc2)
+       )
+plotKS_fauche_S
+#ggsave(filename = "plotKS_fauche_S.png", plotKS_fauche_S)
+```
+
+
+```{r}
+super_div_prai_tot_sp_d0 |>
+  ggplot(aes(x=degre_fauche, y=SPrai_sp, fill=degre_fauche)) + 
+  geom_boxplot(show.legend = FALSE) +
+  #geom_hline(yintercept = mean(super_div_prai_tot_sp_d0$SPrai_sp), color='red') +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Rythme fauchage prairie", y = "Richesse", title = "Richesse spécifique et fauche \nEspèces", fill="") 
+```
+
++ anova pour voir si on trouve la même chose 
+
+
+```{r}
+super_div_prai_tot_sp_d0 |>
+  as.data.frame() |>
+  anova_test(SPrai_sp ~ transect_rythme_fauchage_prairie)
+```
+
++ Test Post-hoc Tukey pour voir si on trouve la même chose
+
+```{r}
+super_div_prai_tot_sp_d0 |>
+  tukey_hsd(SPrai_sp ~ transect_rythme_fauchage_prairie)
+```
+Oui on retrouve les mêmes résultats.
+
+
+### I.3 Test fauche Shannon 
+
++ Graphique
+
+```{r}
+plot1 <- super_div_prai_tot_d0 |>
+  ggplot(aes(x=transect_rythme_fauchage_prairie, y=HPrai_t, fill=transect_rythme_fauchage_prairie)) + 
+  geom_boxplot(show.legend = FALSE) +
+  geom_hline(yintercept = mean(super_div_prai_tot_d0$HPrai_t), color='red')  +
+  geom_text(data = table_F_dens,
+            aes(label = paste("n =", n)), # Affichage de l'effectif au-dessus des boxplots
+            x = table_F_dens$transect_rythme_fauchage_prairie,
+            y = Inf ,
+            vjust = 0.9,
+            size = 3
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 11)) +
+  labs(x = "Rythme fauchage prairie", 
+       y = "Indice de Shannon", 
+       title = paste("Indice de Shannon et fauche \nEspèces et Groupes \nNb transects =",
+                     nrow(super_div_prai_tot_d0)),
+       fill="") 
+
+plot2 <- super_div_prai_tot_sp_d0 |>
+  ggplot(aes(x=transect_rythme_fauchage_prairie, y=HPrai_sp, fill=transect_rythme_fauchage_prairie)) + 
+  geom_boxplot(show.legend = FALSE) +
+  geom_hline(yintercept = mean(super_div_prai_tot_sp_d0$HPrai_sp), color='red') + 
+  geom_text(data = table_F_dens,
+            aes(label = paste("n =", n)), # Affichage de l'effectif au-dessus des boxplots
+            x = table_F_dens$transect_rythme_fauchage_prairie,
+            y = Inf ,
+            vjust = 0.9,
+            size = 3
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 11)) +
+  labs(x = "Rythme fauchage prairie", 
+       y = "Indice de Shannon", 
+       title = paste("Indice de Shannon et fauche \nEspèces \nNb transects = ",
+                     nrow(super_div_prai_tot_sp_d0)), 
+       fill="") 
+
+grid.arrange(top = " " ,  plot1, plot2, ncol = 2)
+
+```
+
+#### 1. Espèces et morphogroupes
+
+```{r}
+H_modele_rythme_t <- lm(HPrai_t ~ transect_rythme_fauchage_prairie, 
+                        data = super_div_prai_tot_d0)
+summary(H_modele_rythme_t)
+```
++ Vérification des conditions sur ce modèle
+
+```{r}
+# Créer un QQ plot des résidus
+ggqqplot(residuals(H_modele_rythme_t))
+
+# Faire un test de Shapiro des résidus
+shapiro_test(residuals(H_modele_rythme_t))
+
+plot(residuals(H_modele_rythme_t))
+
+# Faire un test de Levene pour l'homoscédasticité
+super_div_prai_tot_d0 |>
+  levene_test(HPrai_t ~ transect_rythme_fauchage_prairie)
+
+plot(H_modele_rythme_t,1)
+```
+Pas ok pour la normalité, mais ok pour l'homoscédasticité
+
++ Test Krukal-Wallis
+
+```{r}
+super_div_prai_tot_d0 |>
+  as.data.frame() |>
+  kruskal_test(HPrai_t ~ transect_rythme_fauchage_prairie)
+super_div_prai_tot_d0 |>
+  as.data.frame() |>
+  kruskal_effsize(HPrai_t ~ transect_rythme_fauchage_prairie)
+```
+
++ Tests post-hoc :
+
+```{r}
+# Avec Dunn car non normalité 
+super_div_prai_tot_d0 |>
+  as.data.frame() |>
+  dunn_test(HPrai_t ~ transect_rythme_fauchage_prairie)
+```
+```{r}
+# Avec Tukey qui est robuste
+super_div_prai_tot_d0 |>
+  tukey_hsd(HPrai_t ~ transect_rythme_fauchage_prairie)
+```
+Toujours les mêmes différences signifiactives entre Plusieurs fauches et Non fauchées ou fauches tardives. 
+
+#### 2. Espèces 
+
++ Test Krukal-Wallis
+
+
+```{r}
+res.kw.fsp.H <- super_div_prai_tot_sp_d0 |>
+  as.data.frame() |>
+  kruskal_test(HPrai_sp ~ degre_fauche)
+res.kw.fsp.H
+super_div_prai_tot_sp_d0 |>
+  as.data.frame() |>
+  kruskal_effsize(HPrai_sp ~ degre_fauche)
+```
+Significativité : effet du rythme de fauche sur la richesse
+
++ Test post-hoc Correction de Dunn
+
+```{r}
+pwc3 <- super_div_prai_tot_sp_d0 |>
+  as.data.frame() |>
+  dunn_test(HPrai_sp ~ degre_fauche,p.adjust.method = "bonferroni")
+pwc3
+```
+Comme précédemment, différence signifiactive entre Plusieurs fauches et Fauche tardive ou Non fauchée Fauche précoce.
+
++ Rapport 
+
+```{r}
+pwc3 <- pwc3 |>
+  add_xy_position(x = "degre_fauche", step.increase = 0.1)
+
+plotKS_fauche_H <- ggboxplot(super_div_prai_tot_sp_d0,
+          x = "degre_fauche",
+          y = "HPrai_sp") +
+  stat_pvalue_manual(pwc3, hide.ns = TRUE) +
+  # geom_hline(yintercept = mean(super_div_prai_tot_sp_d0$HPrai_sp),
+  #            linetype = 2, 
+  #            color = "red") +
+  labs(x ="",
+       y="indice de Shannon",
+       subtitle = get_test_label(res.kw.fsp.H, detailed = TRUE),
+       caption = get_pwc_label(pwc3)
+       )
+plotKS_fauche_H
+#ggsave(filename = "plotKS_fauche_H.png", plotKS_fauche_H)
+```
+
+
+### I.4 Test fauche Equitabilité Pielou [to do]
+
+
++ Graphique
+
+```{r}
+plot1 <- super_div_prai_tot_d0 |>
+  ggplot(aes(x=transect_rythme_fauchage_prairie, y=JPrai_t, fill=transect_rythme_fauchage_prairie)) + 
+  geom_boxplot(show.legend = FALSE) +
+  geom_hline(yintercept = mean(super_div_prai_tot_d0$JPrai_t), color='red') +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Rythme fauchage prairie", y = "Indice de Pielou", title = "Indice de Pielou et fauche \nEspèces et Groupes", fill="") 
+
+plot2 <- super_div_prai_tot_sp_d0 |>
+  ggplot(aes(x=transect_rythme_fauchage_prairie, y=JPrai_sp, fill=transect_rythme_fauchage_prairie)) + 
+  geom_boxplot(show.legend = FALSE) +
+  geom_hline(yintercept = mean(super_div_prai_tot_sp_d0$JPrai_sp), color='red') +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Rythme fauchage prairie", y = "Indice de Pielou", title = "Indice de Pilou et fauche \nEspèces", fill="") 
+
+grid.arrange(top = " " ,  plot1, plot2, ncol = 2)
+```
+En fin de compte, je ne sais pas comment cette chose est calculée, pourquoi tant de 1?
+
+
+### I.5 Test fauche Simpson [to do]
+
+
+## II Pâturage
+
++ Table fauche
+
+```{r}
+table_P_dens <- super_div_prai_tot_d0 |>
+  group_by(transect_paturage_prairie) |>
+  summarise(n=n()) |>
+  as.data.frame()
+table_P_dens
+```
+
+### II.1 Test pâturage / densité
+
++ Graphique
+
+```{r}
+plot1 <- super_div_prai_tot_d0 |>
+  ggplot(aes(x=transect_paturage_prairie, y=NPrai_t, fill=transect_paturage_prairie)) + 
+  geom_boxplot(show.legend = FALSE) +
+  geom_hline(yintercept = mean(super_div_prai_tot_d0$NPrai_t), color='red') +
+  geom_text(data = table_P_dens,
+            aes(label = paste("n =", n)), # Affichage de l'effectif au-dessus des boxplots
+            x = table_P_dens$transect_paturage_prairie,
+            y = Inf ,
+            vjust = 0.9,
+            size = 3
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 11)) +
+  labs(x = "Pâturage prairie",
+       y = "Densité", 
+       title = paste("Densité et pâturage \nEspèces/Morphogroupes \nNb transects =",
+                     nrow(super_div_prai_tot_d0)), 
+       fill="") 
+
+plot2 <- super_div_prai_tot_sp_d0 |>
+  ggplot(aes(x=transect_paturage_prairie, y=NPrai_sp, fill=transect_paturage_prairie)) + 
+  geom_boxplot(show.legend = FALSE) +
+  geom_hline(yintercept = mean(super_div_prai_tot_sp_d0$NPrai_sp), color='red') +
+  geom_text(data = table_P_dens,
+            aes(label = paste("n =", n)), # Affichage de l'effectif au-dessus des boxplots
+            x = table_P_dens$transect_paturage_prairie,
+            y = Inf ,
+            vjust = 0.9,
+            size = 3
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size =11)) +
+  labs(x = "Pâturage prairie", 
+       y = "Densité", 
+       title = paste("Densité et pâturage \nEspèces \nNb transects =",
+                     nrow(super_div_prai_tot_sp_d0)), 
+       fill="") 
+
+
+grid.arrange(top = " " ,  plot1, plot2, ncol = 2)
+```
+##### 1. Espèces et morphogroupes
+
+On n'a que 2 modalités, on doit faire un t-test:
+- normalité : robustesse du test car taille de chaque groupe >=30
+- homoscédasticité : levene test ?
+
+```{r}
+# test de levene
+super_div_prai_tot_d0 |>
+  levene_test(NPrai_t ~ transect_paturage_prairie)
+```
+Ok pas de significativité du test de Levene, Variances homogènes
+
++ T-test
+
+```{r}
+super_div_prai_tot_d0 |>
+  rstatix::t_test(NPrai_t ~ transect_paturage_prairie)
+```
+Pas de différence significative de densité moyenne entre les 2 groupes. 
+
+##### 2. Espèces 
+
+On n'a que 2 modalités, on doit faire un t-test:
+- normalité : robustesse du test car taille de chaque groupe >=30
+- homoscédasticité : levene test ?
+
+```{r}
+# test de levene
+super_div_prai_tot_sp_d0 |>
+  levene_test(NPrai_sp ~ transect_paturage_prairie)
+```
+Ok pas de significativité du test de Levene, Variances homogènes
+
++ T-test
+
+```{r}
+res.tt.psp <- super_div_prai_tot_sp_d0 |>
+  as.data.frame() |>
+  rstatix::t_test(NPrai_sp ~ transect_paturage_prairie)
+res.tt.psp
+```
+Même conclusion que pour les espèces et morphogroupes
+
+
++ Test Krukal-Wallis
+
+
+```{r}
+res.kw.psp <- super_div_prai_tot_sp_d0 |>
+  as.data.frame() |>
+  kruskal_test(HPrai_sp ~ transect_paturage_prairie)
+res.kw.psp
+# super_div_prai_tot_sp_d0 |>
+#   as.data.frame() |>
+#   kruskal_effsize(HPrai_sp ~ degre_fauche)
+```
+Significativité : pas d'effet du paturage sur la densité
+```{r}
+res.wil.psp <- super_div_prai_tot_sp_d0 |>
+  as.data.frame() |>
+  wilcox_test(NPrai_sp ~ transect_paturage_prairie) |>
+  add_significance()
+res.wil.psp
+```
+
+
++ Rapport 
+
+```{r}
+res.wil.psp <- res.wil.psp |>
+  add_xy_position(x = "transect_paturage_prairie" ) 
+plotKS_paturage <- ggboxplot(super_div_prai_tot_sp_d0,
+          x = "transect_paturage_prairie",
+          y = "NPrai_sp") +
+  stat_pvalue_manual(res.wil.psp, hide.ns = TRUE) +
+  # geom_hline(yintercept = mean(super_div_prai_tot_sp_d0$NPrai_sp),
+  #            linetype = 2, 
+  #            color = "red") +
+  labs(x ="",
+       y=TeX(r'(densité ($m^2$))'),
+       subtitle = get_test_label(res.wil.psp, detailed = TRUE),
+       caption = get_pwc_label(res.wil.psp)
+       )
+plotKS_paturage
+#ggsave(filename = "plotKS_paturage.png", plotKS_paturage)
+```
++ Test ANOVA pour les espèces
+
+
+```{r}
+anova_paturage_sp <- aov(log_NPrai_sp ~ transect_paturage_prairie, data = super_div_prai_tot_sp_d0)
+summary(anova_paturage_sp)
+```
++ vérification des hypothèses
+
+```{r}
+model.paturage <- lm(log_NPrai_sp ~ transect_paturage_prairie, data = super_div_prai_tot_sp_d0)
+plot(model.paturage,1)
+plot(model.paturage,2)
+plot(residuals(model.paturage))
+shapiro_test(residuals(model.paturage))
+levene_test(super_div_prai_tot_sp_d0, log_NPrai_sp ~ transect_paturage_prairie )
+```
+
+
+
+### II.2 Test pâturage / richesse
+
++ Graphique
+
+```{r}
+plot1 <- super_div_prai_tot_d0 |>
+  ggplot(aes(x=transect_paturage_prairie, y=SPrai_t, fill=transect_paturage_prairie)) + 
+  geom_boxplot(show.legend = FALSE) +
+  geom_hline(yintercept = mean(super_div_prai_tot_d0$SPrai_t), color='red') +
+  geom_text(data = table_P_dens,
+            aes(label = paste("n =", n)), # Affichage de l'effectif au-dessus des boxplots
+            x = table_P_dens$transect_paturage_prairie,
+            y = Inf ,
+            vjust = 0.9,
+            size = 3
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 11)) +
+  labs(x = "Rythme fauchage prairie", 
+       y = "Richesse", 
+       title = paste("Richesse spécifique et fauche \nEspèces et Groupes \nNb transects =",
+                     nrow(super_div_prai_tot_d0)), 
+       fill="") 
+
+plot2 <- super_div_prai_tot_sp_d0 |>
+  ggplot(aes(x=transect_paturage_prairie, y=SPrai_sp, fill=transect_paturage_prairie)) + 
+  geom_boxplot(show.legend = FALSE) +
+  geom_hline(yintercept = mean(super_div_prai_tot_sp_d0$SPrai_sp), color='red')+
+  geom_text(data = table_P_dens,
+            aes(label = paste("n =", n)), # Affichage de l'effectif au-dessus des boxplots
+            x = table_P_dens$transect_paturage_prairie,
+            y = Inf ,
+            vjust = 0.9,
+            size = 3
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 11)) +
+  labs(x = "Rythme fauchage prairie", 
+       y = "Richesse", 
+       title = paste("Richesse spécifique et fauche \nEspèces \nNb transects =",
+                     nrow(super_div_prai_tot_sp_d0)), 
+       fill="") 
+
+grid.arrange(top = " " ,  plot1, plot2, ncol = 2)
+
+```
+
+##### 1. Espèces et morphogroupes
+
+On n'a que 2 modalités, on doit faire un t-test:
+- normalité : robustesse du test car taille de chaque groupe >=30
+- homoscédasticité : levene test ?
+
+```{r}
+# test de levene
+super_div_prai_tot_d0 |>
+  levene_test(SPrai_t ~ transect_paturage_prairie)
+```
+Test de levene non significatif
+
++ T-test
+```{r}
+# t-test
+super_div_prai_tot_d0 |>
+  rstatix::t_test(SPrai_t ~ transect_paturage_prairie)
+```
+
+
+##### 2. Espèces 
+
+On n'a que 2 modalités, on doit faire un t-test:
+- normalité : robustesse du test car taille de chaque groupe >=30
+- homoscédasticité : levene test ?
+
+```{r}
+# test de levene
+super_div_prai_tot_sp_d0 |>
+  levene_test(SPrai_sp ~ transect_paturage_prairie)
+```
+Test de levene non significatif
+
++ T-test
+```{r}
+# t-test
+super_div_prai_tot_sp_d0 |>
+  rstatix::t_test(SPrai_sp ~ transect_paturage_prairie)
+```
+Dans tous les cas pas de significativité ... Pas la peine que je fasse Shannon/Simpson et tutti quantti 
+
++ En non paramétrique
+
++ Kruskal_Wallis 
+```{r}
+res.kw.psp.S <-super_div_prai_tot_sp_d0 |>
+  as.data.frame() |>
+  rstatix::kruskal_test(SPrai_sp ~ transect_paturage_prairie)
+res.kw.psp.S
+```
++ wilcoxon
+
+```{r}
+res.wil.psp2 <- super_div_prai_tot_sp_d0 |>
+  as.data.frame() |>
+  wilcox_test(SPrai_sp ~ transect_paturage_prairie) |>
+  add_significance()
+res.wil.psp2
+```
+
+```{r}
+res.wil.psp2 <- res.wil.psp2 |>
+  add_xy_position(x = "transect_paturage_prairie" )
+
+plotKS_paturage_S <- ggboxplot(super_div_prai_tot_sp_d0,
+          x = "transect_paturage_prairie",
+          y = "SPrai_sp") +
+  stat_pvalue_manual(res.wil.psp2, hide.ns = TRUE) +
+  # geom_hline(yintercept = mean(super_div_prai_tot_sp_d0$SPrai_sp),
+  #            linetype = 2, 
+  #            color = "red") +
+  labs(x ="",
+       y="richesse spécifique",
+       subtitle = get_test_label(res.wil.psp2, detailed = TRUE),
+       caption = get_pwc_label(res.wil.psp2)
+       )
+plotKS_paturage_S
+#ggsave(filename = "plotKS_paturage_S.png", plotKS_paturage_S)
+```
+### II.3 Test pâturage Shannon
+
+#### Espèces
+
++ Kruskal - Wallis
+
+```{r}
+res.kw.psp.H <-super_div_prai_tot_sp_d0 |>
+  as.data.frame() |>
+  rstatix::kruskal_test(HPrai_sp ~ transect_paturage_prairie)
+res.kw.psp.H
+```
+
+
++ wilcoxon
+
+```{r}
+res.wil.psp3 <- super_div_prai_tot_sp_d0 |>
+  as.data.frame() |>
+  wilcox_test(HPrai_sp ~ transect_paturage_prairie) |>
+  add_significance()
+res.wil.psp3
+```
+
+```{r}
+res.wil.psp3 <- res.wil.psp3 |>
+  add_xy_position(x = "transect_paturage_prairie" )
+
+plotKS_paturage_H <- ggboxplot(super_div_prai_tot_sp_d0,
+          x = "transect_paturage_prairie",
+          y = "HPrai_sp") +
+  stat_pvalue_manual(res.wil.psp3, hide.ns = TRUE) +
+  # geom_hline(yintercept = mean(super_div_prai_tot_sp_d0$HPrai_sp),
+  #            linetype = 2, 
+  #            color = "red") +
+  labs(x ="",
+       y="indice de Shannon",
+       subtitle = get_test_label(res.wil.psp3, detailed = TRUE),
+       caption = get_pwc_label(res.wil.psp3)
+       )
+plotKS_paturage_H
+#ggsave(filename = "plotKS_paturage_H.png", plotKS_paturage_H)
+```
+
+## III Effet combiné : Fauche et Pâturage
+
+Ahhh, là ca devient intéressant .
+
++ Table fauche/paturage
+
+
+```{r}
+table(as.data.frame(super_div_prai_tot_d0)[,c("transect_paturage_prairie", "transect_rythme_fauchage_prairie")])
+```
+
+```{r}
+table_FP_dens <- super_div_prai_tot_d0 |>
+  group_by(transect_rythme_fauchage_prairie, transect_paturage_prairie) |>
+  summarise(n=n()) |>
+  as.data.frame()
+table_FP_dens
+```
+
+
+### III.1 Test Effet combiné / densité
+
++ Graphique
+
+```{r}
+plot1 <- super_div_prai_tot_d0 |>
+  ggplot(aes(x = transect_rythme_fauchage_prairie, y = NPrai_t, fill= transect_paturage_prairie)) + 
+  geom_boxplot() +
+  # geom_text(data = table_F_dens,
+  #           aes(label = paste("n =", n)), # Affichage de l'effectif au-dessus des boxplots
+  #           x = table_F_dens$transect_rythme_fauchage_prairie,
+  #           y = Inf ,
+  #           vjust = 0.9,
+  #           size = 3
+  # ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 11),
+        legend.position = "bottom") +
+  labs(x = "Rythme fauchage prairie", 
+       y = "Densité", 
+       title = paste("Densité et fauche*paturage \nEspèces et Groupes \nNb transects =",
+                     nrow(super_div_prai_tot_d0)),
+       fill ="") 
+
+plot2 <- super_div_prai_tot_sp_d0 |>
+  ggplot(aes(x = transect_rythme_fauchage_prairie, y = SPrai_sp, fill = transect_paturage_prairie)) + 
+  geom_boxplot() +
+  # geom_text(data = table_F_dens,
+  #           aes(label = paste("n =", n)), # Affichage de l'effectif au-dessus des boxplots
+  #           x = table_F_dens$transect_rythme_fauchage_prairie,
+  #           y = Inf ,
+  #           vjust = 0.9,
+  #           size = 3
+  # ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 11),
+        legend.position = "bottom") +
+  labs(x = "Rythme fauchage prairie", 
+       y = "Densité", 
+       title = paste("Densité et fauche*paturage \nEspèces \nNb transects =",
+                     nrow(super_div_prai_tot_sp_d0)),
+       fill = "") 
+
+grid.arrange(top = " " ,  plot1, plot2, ncol = 2)
+
+```
+
+
+#### 1. Espèces et morphogroupes
+
+On travaille sur la variable log_NPrai_t
+
+```{r}
+# model_FP_t <- lm(log_NPrai_t ~ transect_rythme_fauchage_prairie*transect_paturage_prairie,
+#                  data = super_div_prai_tot_d0)
+# summary(model_FP_t)
+```
++ Vérification des hypothèses de l'Anova
+
+```{r}
+# # Créer un QQ plot des résidus
+# ggqqplot(residuals(model_FP_t))
+# 
+# # Calculer le test de normalité de Shapiro-Wilk
+# shapiro_test(residuals(model_FP_t))
+# 
+# # Test de levene pour l'homogénéité des variances
+# super_div_prai_tot_d0 |>
+#   levene_test(log_NPrai_t ~ transect_rythme_fauchage_prairie*transect_paturage_prairie)
+# 
+# plot(model_FP_t, 1)
+```
+On a tout bien normalité des résidus. L'homoscédasticité c'est limite
+
++ Anova à 2 facteurs
+
+```{r}
+# res.aov.fpt <- super_div_prai_tot_d0 |>
+#   anova_test(log_NPrai_t ~ transect_rythme_fauchage_prairie*transect_paturage_prairie)
+# res.aov.fpt
+```
+Pas d'effet significatif de l'interaction de `transect_rythme_fauchage_prairie` et `transect_paturage_prairie` sur la densité.
+
++ Etude de l'effet principal `transect_rythme_fauchage_prairie`
+
+```{r}
+super_div_prai_tot_d0 |>
+  pairwise_t_test(
+    log_NPrai_t ~ transect_rythme_fauchage_prairie, 
+    p.adjust.method = "bonferroni"
+    )
+```
+On retrouve les résultats précédents.
+
+Autre méthode
+
+```{r}
+# Utilise les degrés de liberté globaux du modèle : detection plus facile de différences significatives
+# super_div_prai_tot_d0 |>
+#   emmeans_test(
+#     log_NPrai_t ~ transect_rythme_fauchage_prairie, 
+#     p.adjust.method = "bonferroni",
+#     model = model_FP_t
+#     )
+```
+
+#### 2. Espèces 
+
+On travaille sur la variable log_NPrai_sp
+
+```{r}
+# model_FP_sp <- lm(log_NPrai_sp ~ transect_rythme_fauchage_prairie*transect_paturage_prairie,
+#                  data = super_div_prai_tot_sp_d0)
+# summary(model_FP_sp)
+```
+
+```{r}
+# # Créer un QQ plot des résidus
+# ggqqplot(residuals(model_FP_sp))
+# 
+# # Calculer le test de normalité de Shapiro-Wilk
+# shapiro_test(residuals(model_FP_sp))
+# 
+# # Test de levene pour l'homogénéité des variances
+# super_div_prai_tot_sp_d0 |>
+#   levene_test(log_NPrai_sp ~ transect_rythme_fauchage_prairie*transect_paturage_prairie)
+# 
+# plot(model_FP_sp, 1)
+```
+Pas de normalité des résidus, pas d'homoscédasticité. On n'est même pas censé faire une anova. 
+
+
+```{r}
+# res.aov.fpsp <- super_div_prai_tot_sp_d0 |>
+#   anova_test(log_NPrai_sp ~ transect_rythme_fauchage_prairie*transect_paturage_prairie)
+# res.aov.fpsp
+```
+### III.1 Test Effet combiné / richesse
+
++ Graphique
+
+```{r}
+plot1 <- super_div_prai_tot_d0 |>
+  ggplot(aes(x = transect_rythme_fauchage_prairie, y = NPrai_t, fill= transect_paturage_prairie)) + 
+  geom_boxplot() +
+  # geom_text(data = table_FP_dens,
+  #           aes(label = paste("n =", n)), # Affichage de l'effectif au-dessus des boxplots
+  #           x = table_P_dens$transect_paturage_prairie,
+  #           y = Inf ,
+  #           vjust = 0.9,
+  #           size = 3
+  # ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 11),
+        legend.position = "bottom") +
+  labs(x = "Rythme fauchage prairie", 
+       y = "Richesse", 
+       title = paste("Richesse spécifique et fauche \nEspèces et Groupes \nNb transects =",
+                     nrow(super_div_prai_tot_d0)),
+       fill ="") 
+
+plot2 <- super_div_prai_tot_sp_d0 |>
+  ggplot(aes(x = transect_rythme_fauchage_prairie, y = SPrai_sp, fill = transect_paturage_prairie)) + 
+  geom_boxplot() +
+  # geom_text(data = table_FP_dens,
+  #           aes(label = paste("n =", n)), # Affichage de l'effectif au-dessus des boxplots
+  #           x = table_P_dens$transect_paturage_prairie,
+  #           y = Inf ,
+  #           vjust = 0.9,
+  #           size = 3
+  # ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 11),
+        legend.position = "bottom") +
+  labs(x = "Rythme fauchage prairie", 
+       y = "Richesse", 
+       title = paste("Richesse spécifique et fauche \nEspèces \nNb transects =",
+                     nrow(super_div_prai_tot_sp_d0)),
+       fill = "") 
+
+grid.arrange(top = " " ,  plot1, plot2, ncol = 2)
+
+```
+#### 1. Espèces et morphogroupes
+
+
+```{r}
+# on fait un modèle de Poisson
+model_S_FP_t <- glm(SPrai_t ~ transect_rythme_fauchage_prairie*transect_paturage_prairie, 
+                      data = super_div_prai_tot_d0,
+                      family = "poisson")
+summary(model_S_FP_t)
+```
+
++ Vérification des hypothèses de l'Anova
+
+```{r}
+# Créer un QQ plot des résidus
+ggqqplot(residuals(model_S_FP_t))
+
+# Calculer le test de normalité de Shapiro-Wilk
+shapiro_test(residuals(model_S_FP_t))
+
+# Test de levene pour l'homogénéité des variances
+super_div_prai_tot_d0 |>
+  levene_test(SPrai_t ~ transect_rythme_fauchage_prairie*transect_paturage_prairie)
+
+plot(model_S_FP_t, 1)
+```
+
++ Anova à 2 facteurs
+
+Méthode 1
+```{r}
+res.aov.S.fpt <- super_div_prai_tot_d0 |>
+  as.data.frame() |>
+  anova_test(SPrai_t ~ transect_rythme_fauchage_prairie*transect_paturage_prairie)
+res.aov.S.fpt
+```
+Méthode 2
+```{r}
+anova(model_S_FP_t, test = "Chisq")
+```
+Pour la méthode 2, petit effet significatif de l'interaction
+```{r}
+super_div_prai_tot_d0 |>
+  as.data.frame() |>
+  group_by(transect_rythme_fauchage_prairie) |>
+  anova_test(SPrai_t ~ transect_paturage_prairie)
+```
+
+## IV. D'autres variables
+
+
++ Une nouvelle table avec les variables id_user et site pour modèle avec effet aléatoire 
+
+On joint la table_user_site
+
+```{r}
+df_prai_taxo_env_t <- super_div_prai_tot_d0 |>
+  inner_join(table_user_site, by = "id_transect_annee") |> 
+  unique()
+which(duplicated(df_prai_taxo_env_t$id_transect_annee))
+```
+
+```{r}
+df_prai_taxo_env_t$id_transect_annee[c(74, 1021)]
+```
+```{r}
+df_prai_taxo_env_t |>
+  filter(id_transect_annee == "1291_Transect prairie du Vivier_2022" | 
+         id_transect_annee == "903_Prairie centrale_2023" )
+```
+OK c'est embêtant, on n'a pas le même utilisateur... On ne va utiliser que l'effet aléatoire du site ou du transect
+
+### IV.1 Modèle pour la densité
+
+
+Var contrôle : Type Prairie
+Effet aléatoire : site? 
+
+
+```{r}
+modele_N_t_1 <- lm(log_NPrai_t ~ 
+                      transect_rythme_fauchage_prairie + 
+                      transect_type_prairie + 
+                      semis_sursemis,
+                   data = df_prai_taxo_env_t)
+summary(modele_N_t_1)
+```
+
+
+```{r}
+# modele avec effet aléatoire 
+library(nlme)
+modele_N_t_2 <- lme(log_NPrai_t ~ 
+                      transect_rythme_fauchage_prairie + 
+                      transect_type_prairie,
+                      random = list(~ 1|site_id),
+                   data = df_prai_taxo_env_t)
+summary(modele_N_t_2)
+```
+```{r}
+# modele avec effet aléatoire id_transect
+modele_N_t_3 <- lme(log_NPrai_t ~ 
+                      transect_rythme_fauchage_prairie + 
+                      transect_type_prairie,
+                      random = ~ 1|id_transect,
+                   data = df_prai_taxo_env_t)
+summary(modele_N_t_3)
+```
+```{r}
+# modèle avec les 2 effets aléatoires
+modele_N_t_3 <- lme(log_NPrai_t ~ 
+                      transect_rythme_fauchage_prairie + 
+                      transect_type_prairie,
+                      random = list(~ 1|site_id, ~1|id_transect),
+                   data = df_prai_taxo_env_t)
+summary(modele_N_t_3)
+```
+Pfiouuuu rien de significatif 
+
+```{r}
+# modèle avec les 2 effets aléatoires, sans le type de prairie
+modele_N_t_4 <- lme(log_NPrai_t ~ transect_rythme_fauchage_prairie +
+                      transect_type_prairie +
+                      semis_sursemis, 
+                      random = list(~ 1|site_id, ~1|id_transect),
+                   data = df_prai_taxo_env_t)
+summary(modele_N_t_4)
+```
+
+
+
+
+
+
+### IV.2 [Rennes 30/04] Modèle avec effet aléatoire espèces
+
+#### 1. Modele densite - especes et morphogroupes
+
+
+```{r}
+df_prai_taxo_env_long_t <- releves_prai_tot |>
+  rownames_to_column("id_transect_annee") |>
+  inner_join(select(super_div_prai_tot_d0, id_transect_annee, transect_rythme_fauchage_prairie),
+             by= "id_transect_annee" ) |>
+  mutate(degre_fauche = case_when(
+    transect_rythme_fauchage_prairie == "Plusieurs fauches" ~ "3.Plusieurs fauches",
+    transect_rythme_fauchage_prairie == "Fauche précoce" ~ "2.Fauche précoce",
+    transect_rythme_fauchage_prairie == "Fauche tardive" ~ "1.Fauche tardive",
+    transect_rythme_fauchage_prairie == "Non fauchée" ~ "0.Non fauchée",
+  )) |>
+  pivot_longer(`Amaryllis`:`Papillon indéterminé`) |>
+  rename("espece" = "name", "densite" = "value") |>
+  mutate(densite = densite*100) |>
+  mutate(log_densite = log(densite + 1)) |>
+  filter(densite != 0)
+df_prai_taxo_env_long_t
+```
+
+```{r}
+summary(df_prai_taxo_env_long_t)
+boxplot(df_prai_taxo_env_long_t$densite)
+#hist(df_prai_taxo_env_long_t$abond, breaks = 100)
+plot(density(df_prai_taxo_env_long_t$densite))
+plot(density(df_prai_taxo_env_long_t$log_densite))
+```
+
+
+```{r}
+library(lme4)
+# modèle avec l'effets aléatoire espece - family = gaussian
+modele_eff_sp <- lme4::lmer(densite ~ degre_fauche + (1|espece),
+                   data = df_prai_taxo_env_long_t)
+modele_eff_sp
+```
+Comment voir la part d'effet fixe par rapport à l'effet aléatoire?
+
+```{r}
+summary(modele_eff_sp)
+```
+
++ Calculer le pseudo-R2 Macfadden
+
+```{r}
+performance::r2(modele_eff_sp)
+```
+Explication:
+marginal R2: value associated with fixed effects
+conditional : R2 value associated with fixed effects plus the random effects
+
+
+```{r}
+modele_simple <- glm(log_densite ~ degre_fauche,
+    data = df_prai_taxo_env_long_t)
+performance::r2(modele_simple)
+```
+
+
+
+```{r}
+# Sans changer l'intercept
+
+modele_eff_sp_init <- glm(densite ~ transect_rythme_fauchage_prairie + espece,
+                   data = df_prai_taxo_env_long_t)
+summary(modele_eff_sp_init)
+```
+
+
+```{r}
+library(car)
+Anova(modele_eff_sp_init, type = 2)
+```
+
+
+```{r}
+library(lmerTest)
+anova(modele_eff_sp)
+```
+```{r}
+# Comparaison par paires
+library(emmeans)
+emmeans(modele_eff_sp, list(pairwise ~ degre_fauche), 
+        adjust = "tukey",
+        pbkrtest.limit = 6000) 
+```
+
+
+```{r}
+emmeans(modele_eff_sp_init, list(pairwise ~ transect_rythme_fauchage_prairie), 
+        adjust = "tukey",
+        pbkrtest.limit = 6000) 
+```
+
+
+#### 2. Modele densite - especes 
+
+```{r}
+df_prai_taxo_env_long_sp <- releves_prai_tot_sp |>
+  rownames_to_column("id_transect_annee") |>
+  inner_join(select(super_div_prai_tot_d0, id_transect_annee, transect_rythme_fauchage_prairie),
+             by= "id_transect_annee" ) |>
+  mutate(degre_fauche = case_when(
+    transect_rythme_fauchage_prairie == "Plusieurs fauches" ~ "3.Plusieurs fauches",
+    transect_rythme_fauchage_prairie == "Fauche précoce" ~ "2.Fauche précoce",
+    transect_rythme_fauchage_prairie == "Fauche tardive" ~ "1.Fauche tardive",
+    transect_rythme_fauchage_prairie == "Non fauchée" ~ "0.Non fauchée",
+  )) |>
+  pivot_longer(`Amaryllis`:`Vulcain`) |>
+  rename("espece" = "name", "densite" = "value") |>
+  mutate(densite = densite*100) |>
+  mutate(log_densite = log(densite + 1)) |>
+  filter(densite != 0)
+df_prai_taxo_env_long_sp
+```
+```{r}
+# modèle avec l'effets aléatoire espece - family = gaussian
+modele_eff_sp_red <- lme4::lmer(densite ~ degre_fauche + (1|espece),
+                   data = df_prai_taxo_env_long_sp)
+modele_eff_sp_red
+```
+
+
+```{r}
+library(car)
+Anova(modele_eff_sp, type = 3)
+```
+#### 3. Modele Shannon - especes 
+
+
+## V. [Retour Anova] Semis-sursemis
+
+** UNIQUEMENT ESPECES**
+
++ Table semis
+
+```{r}
+table_SS_dens <- super_div_prai_tot_d0 |>
+  filter (semis_sursemis != "Je ne sais pas") |>
+  group_by(semis_sursemis) |>
+  summarise(n=n()) |>
+  as.data.frame()
+table_SS_dens
+```
+
+### V.1 Test semis_sursemis / densité
+
++ Graphique
+
+```{r}
+plot1 <- super_div_prai_tot_d0 |>
+  filter (semis_sursemis != "Je ne sais pas") |>
+  ggplot(aes(x=semis_sursemis, y=NPrai_t, fill=semis_sursemis)) + 
+  geom_boxplot(show.legend = FALSE) +
+  geom_hline(yintercept = mean(super_div_prai_tot_d0[super_div_prai_tot_d0$semis_sursemis != "Je ne sais pas",]$NPrai_t), color='red') +
+  geom_text(data = table_SS_dens,
+            aes(label = paste("n =", n)), # Affichage de l'effectif au-dessus des boxplots
+            x = table_SS_dens$semis_sursemis,
+            y = Inf ,
+            vjust = 0.9,
+            size = 3
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 11)) +
+  labs(x = "Semis_sursemis prairie",
+       y = "Densité", 
+       title = paste("Densité et Semis_sursemis \nEspèces/Morphogroupes \nNb transects =",
+                     nrow(super_div_prai_tot_d0[super_div_prai_tot_d0$semis_sursemis != "Je ne sais pas",])), 
+       fill="") 
+
+plot2 <- super_div_prai_tot_sp_d0 |>
+  filter (semis_sursemis != "Je ne sais pas") |>
+  ggplot(aes(x=semis_sursemis, y=NPrai_sp, fill=semis_sursemis)) + 
+  geom_boxplot(show.legend = FALSE) +
+  geom_hline(yintercept = mean(super_div_prai_tot_sp_d0[super_div_prai_tot_sp_d0$semis_sursemis != "Je ne sais pas",]$NPrai_sp), color='red') +
+  geom_text(data = table_SS_dens,
+            aes(label = paste("n =", n)), # Affichage de l'effectif au-dessus des boxplots
+            x = table_SS_dens$semis_sursemis,
+            y = Inf ,
+            vjust = 0.9,
+            size = 3
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size =11)) +
+  labs(x = "Semis_sursemis prairie", 
+       y = "Densité", 
+       title = paste("Densité et Semis_sursemis \nEspèces \nNb transects =",
+                     nrow(super_div_prai_tot_sp_d0[super_div_prai_tot_sp_d0$semis_sursemis != "Je ne sais pas",])), 
+       fill="") 
+
+
+grid.arrange(top = " " ,  plot1, plot2, ncol = 2)
+```
+
+#####  Espèces 
+
+On n'a que 2 modalités, on doit faire un t-test:
+- normalité : robustesse du test car taille de chaque groupe >=30
+- homoscédasticité : levene test ?
+
+```{r}
+# test de levene
+super_div_prai_tot_sp_d0 |>
+  filter(semis_sursemis != "Je ne sais pas") |>
+  levene_test(NPrai_sp ~ semis_sursemis)
+```
+Test de levene non significatif
+
++ T-test
+```{r}
+# t-test
+super_div_prai_tot_sp_d0 |>
+  mutate(semis_sursemis = as.character(semis_sursemis)) |>
+  filter(semis_sursemis != "Je ne sais pas") |>
+  as.data.frame() |>
+  rstatix::t_test(NPrai_sp ~ semis_sursemis)
+```
+
++ Test Krukal-Wallis
+
+
+```{r}
+res.kw.ssp <- super_div_prai_tot_sp_d0 |>
+  filter(semis_sursemis != "Je ne sais pas") |>
+  as.data.frame() |>
+  kruskal_test(HPrai_sp ~ semis_sursemis)
+res.kw.ssp
+```
+Significativité : effet sur semis_sursemis sur la densité!
+
+```{r}
+df <- super_div_prai_tot_sp_d0 |>
+  as.data.frame() |>
+  mutate(semis_sursemis = as.character(semis_sursemis)) |>
+  filter(semis_sursemis != "Je ne sais pas") |>
+  mutate(semis_sursemis = as.factor(semis_sursemis))
+df
+```
+
+```{r}
+pwc.s <- df|>
+  rstatix::wilcox_test(NPrai_sp ~ semis_sursemis, paired = F) |>
+  add_significance()
+pwc.s
+```
+
+
++ Rapport 
+
+```{r}
+pwc.s <- pwc.s |>
+  add_xy_position(x = "semis_sursemis", step.increase = 0.1)
+
+plotKS_semis <- ggboxplot(df,
+          x = "semis_sursemis",
+          y = "NPrai_sp") +
+  stat_pvalue_manual(pwc.s, hide.ns = TRUE) +
+  geom_hline(yintercept = mean(df$NPrai_sp),
+             linetype = 2, 
+             color = "red") +
+  labs(x ="",
+       y="densité",
+       subtitle = get_test_label(pwc.s, detailed = TRUE),
+       caption = get_pwc_label(pwc.s)
+       )
+plotKS_semis
+#ggsave(filename = "plotKS_semis.png", plotKS_semis)
+```
+
+
++ Test ANOVA pour les espèces
+
+```{r}
+model.semis <- lm(log_NPrai_sp ~ semis_sursemis, data = df)
+```
+
+```{r}
+anova_semis_sp <- aov(log_NPrai_sp ~ semis_sursemis, data = df)
+summary(anova_semis_sp)
+```
++ vérification des hypothèses
+
+```{r}
+
+plot(model.semis,1)
+plot(model.semis,2)
+plot(residuals(model.semis))
+shapiro_test(residuals(model.semis))
+levene_test(df, log_NPrai_sp ~ semis_sursemis )
+```
+
+
+
+### V.2 Test semis_sursemis / richesse
+
++ Graphique
+
+```{r}
+plot1 <- super_div_prai_tot_d0 |>
+  filter (semis_sursemis != "Je ne sais pas") |>
+  ggplot(aes(x=semis_sursemis, y=SPrai_t, fill=semis_sursemis)) + 
+  geom_boxplot(show.legend = FALSE) +
+  geom_hline(yintercept = mean(super_div_prai_tot_d0[super_div_prai_tot_d0$semis_sursemis != "Je ne sais pas",]$SPrai_t), color='red') +
+  geom_text(data = table_SS_dens,
+            aes(label = paste("n =", n)), # Affichage de l'effectif au-dessus des boxplots
+            x = table_SS_dens$semis_sursemis,
+            y = Inf ,
+            vjust = 0.9,
+            size = 3
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 11)) +
+  labs(x = "Semis_sursemis", 
+       y = "Richesse", 
+       title = paste("Richesse spécifique et Semis_sursemis \nEspèces et Groupes \nNb transects =",
+                     nrow(super_div_prai_tot_d0[super_div_prai_tot_d0$semis_sursemis != "Je ne sais pas",])), 
+       fill="") 
+
+plot2 <- super_div_prai_tot_sp_d0 |>
+  filter (semis_sursemis != "Je ne sais pas") |>
+  ggplot(aes(x=semis_sursemis, y=SPrai_sp, fill=semis_sursemis)) + 
+  geom_boxplot(show.legend = FALSE) +
+  geom_hline(yintercept = mean(super_div_prai_tot_sp_d0[super_div_prai_tot_sp_d0$semis_sursemis != "Je ne sais pas",]$SPrai_sp), color='red')+
+  geom_text(data = table_SS_dens,
+            aes(label = paste("n =", n)), # Affichage de l'effectif au-dessus des boxplots
+            x = table_SS_dens$semis_sursemis,
+            y = Inf ,
+            vjust = 0.9,
+            size = 3
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 11)) +
+  labs(x = "Semis_sursemis", 
+       y = "Richesse", 
+       title = paste("Richesse spécifique et Semis_sursemis \nEspèces \nNb transects =",
+                     nrow(super_div_prai_tot_sp_d0[super_div_prai_tot_sp_d0$semis_sursemis != "Je ne sais pas",])), 
+       fill="") 
+
+grid.arrange(top = " " ,  plot1, plot2, ncol = 2)
+
+```
+#####  Espèces 
+
+On n'a que 2 modalités, on doit faire un t-test:
+- normalité : robustesse du test car taille de chaque groupe >=30
+- homoscédasticité : levene test ?
+
+```{r}
+# 
+# test de levene
+super_div_prai_tot_sp_d0 |>
+  filter(semis_sursemis != "Je ne sais pas") |>
+  levene_test(SPrai_sp ~ semis_sursemis)
+```
+Test de levene significatif. Pas d'homoscédaticité.
+On fait Kruskal-Wallis
+
+
+
+
++ Test Kruskall_Wallis pour les espèces 
+
+```{r}
+super_div_prai_tot_sp_d0 |>
+  as.data.frame() |>
+  filter(semis_sursemis != "Je ne sais pas") |>
+  kruskal_test(SPrai_sp ~ semis_sursemis)
+super_div_prai_tot_sp_d0 |>
+  as.data.frame() |>
+  filter(semis_sursemis != "Je ne sais pas") |>
+  kruskal_effsize(SPrai_sp ~ semis_sursemis)
+```
+
++ Wilcoxon
+
+```{r}
+pwc.s2 <- df|>
+  rstatix::wilcox_test(SPrai_sp ~ semis_sursemis, paired = F) |>
+  add_significance()
+pwc.s2
+```
+
+
++ Rapport 
+
+```{r}
+pwc.s2 <- pwc.s2 |>
+  add_xy_position(x = "semis_sursemis")
+
+plotKS_semis_S <- ggboxplot(df,
+          x = "semis_sursemis",
+          y = "SPrai_sp") +
+  stat_pvalue_manual(pwc.s2, hide.ns = TRUE) +
+  geom_hline(yintercept = mean(df$SPrai_sp),
+             linetype = 2, 
+             color = "red") +
+  labs(x ="",
+       y="richesse spécifique",
+       subtitle = get_test_label(pwc.s2, detailed = TRUE),
+       caption = get_pwc_label(pwc.s2)
+       )
+plotKS_semis_S
+#ggsave(filename = "plotKS_semis_S.png", plotKS_semis_S)
+```
+
+### V.2 Test semis_sursemis / Shannon
+
+
++ Wilcoxon
+
+```{r}
+pwc.s3 <- df|>
+  rstatix::wilcox_test(HPrai_sp ~ semis_sursemis, paired = F) |>
+  add_significance()
+pwc.s3
+```
+
+
++ Rapport 
+
+```{r}
+pwc.s3 <- pwc.s3 |>
+  add_xy_position(x = "semis_sursemis", step.increase = 0.1)
+
+plotKS_semis_H <- ggboxplot(df,
+          x = "semis_sursemis",
+          y = "HPrai_sp") +
+  stat_pvalue_manual(pwc.s3, hide.ns = TRUE) +
+  geom_hline(yintercept = mean(df$HPrai_sp),
+             linetype = 2, 
+             color = "red") +
+  labs(x ="",
+       y="indoice de Shannon",
+       subtitle = get_test_label(pwc.s3, detailed = TRUE),
+       caption = get_pwc_label(pwc.s3)
+       )
+plotKS_semis_H
+#ggsave(filename = "plotKS_semis_H.png", plotKS_semis_H)
+```

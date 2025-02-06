@@ -1,0 +1,410 @@
+---
+title: "Modele avec effet aléatoire espèce"
+author: "Sariaka Ramialison"
+date: "2024-08-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::read_chunk("Prairies_modeles.Rmd")
+```
+
+
+# 1. Récapitulatif tables
+
+```{r}
+# Table normale
+super_table_prai
+
+# Table précédente sans les NPrai_sp ==0
+table_non_nulle
+
+# Table longue de toutes les densités des espèces sur les prairies (Nb: on est par 1000m)
+data_densite_sp <- 
+  releves_prai_tot |>
+  rownames_to_column("id_transect_annee") |>
+  mutate(annee = str_sub(id_transect_annee, -4, -1)) |>
+  inner_join(select(super_div_prai_tot_sp_d, id_transect_annee, transect_rythme_fauchage_prairie, transect_paturage_prairie, semis_sursemis),
+             by= "id_transect_annee" ) |>
+  mutate(degre_fauche = case_when(
+    transect_rythme_fauchage_prairie == "Plusieurs fauches" ~ "3.Plusieurs fauches",
+    transect_rythme_fauchage_prairie == "Fauche précoce" ~ "2.Fauche précoce",
+    transect_rythme_fauchage_prairie == "Fauche tardive" ~ "1.Fauche tardive",
+    transect_rythme_fauchage_prairie == "Non fauchée" ~ "0.Non fauchée",
+  )) |>
+  pivot_longer(`Amaryllis`:`Papillon indéterminé`) |>
+  #pivot_longer(`Amaryllis`:`Vulcain`) |>
+  rename("espece" = "name", "densite" = "value") |>
+  #mutate(densite = densite*100) |>
+  left_join(select(table_user_site, id_transect_annee, site_id, user_id, id_transect), by = "id_transect_annee") |>
+  left_join(select(table_sp, id_transect, lat, long), by = "id_transect") |>
+  filter(espece %in% especes) |>
+  select(-user_id, -id_transect) |>
+  left_join(select(super_table_prai, 
+                   id_transect, id_transect_annee, 
+                   habitat,
+                   classe_habitat,
+                   axe1_1000:axe2_10000),
+            by = "id_transect_annee") |>
+  unique() 
+  
+data_densite_sp
+
+```
+# 2. Réfléchir
+
+Les relevés doivent être les mêmes que ceux de la table non nulle. 
+- filtrer data_densite_sp par id_transect_annee de table non nulle `data_densite_sp_trans_non_nul`
+
+On ne pourra pas prendre le log des valeurs de cette table parce que:
+- il y a des valeurs nulles
+- et la sommme des log des densités des espèces sur un transect ne donnera pas la meme variable que logNPrai_sp de table non nulle
+
+On va implémenter le modèle sans log. 
+D'abord sans l'effet aléatoire espèce : on va comparer les résultats sur les 2 tables différentes
+Ensuite avec l'effet aléatoire espèce : sur `data_densite_sp_trans_non_nul`
+
+## 2.a. Table longue des relevés à garder
+
+```{r}
+data_densite_sp_trans_non_nul <- data_densite_sp |>
+  filter(id_transect_annee %in% unique(table_non_nulle$id_transect_annee))
+data_densite_sp_trans_non_nul 
+```
+
+## 2.b. Modèle sans effet aléatoire espèce et sans log sur les 2 tables
+
+#### (i) Modèle densite simple sur table 1 [Ne converge pas]
+
+```{r}
+# Modèle log-densité table 1
+modele.prai.densite1.0 <- glmmTMB(NPrai_sp ~ degre_fauche +
+                                  transect_paturage_prairie +
+                                  transect_paturage_prairie*degre_fauche +
+                                  axe1_1000 +
+                                  axe2_1000 +
+                                  axe1_10000 +
+                                  axe2_10000 +
+                                  # (1|espece) +
+                                  (1|annee) +
+                                  (1|site_id/id_transect),                                 ,
+                                data = table_non_nulle
+)
+summary(modele.prai.densite1.0)
+```
+
+#### (ii) Modèle log-densite sur table 1 [Ok déjà fait]
+
+```{r}
+# Modèle log-densité table 1
+modele.prai.densite1 <- glmmTMB(logNPrai_sp ~ degre_fauche +
+                                  transect_paturage_prairie +
+                                  transect_paturage_prairie*degre_fauche +
+                                  axe1_1000 +
+                                  axe2_1000 +
+                                  axe1_10000 +
+                                  axe2_10000 +
+                                  # (1|espece) +
+                                  (1|annee) +
+                                  (1|site_id/id_transect),                                 ,
+                                data = table_non_nulle
+)
+summary(modele.prai.densite1)
+```
+
+```{r}
+# Validité
+# Résidus
+simulation1 <- simulateResiduals(modele.prai.densite1)
+plot(simulation1)
+
+# performance
+model_performance(modele.prai.densite1)
+check_overdispersion(modele.prai.densite1)
+check_autocorrelation(modele.prai.densite1)
+check_collinearity(modele.prai.densite1)
+```
+
+
+#### (iii) Modèle sans log sur table 2
+
+
+```{r}
+# Modèle densité table 2
+modele.prai.densite2 <- glmmTMB(densite ~ degre_fauche +
+                                  transect_paturage_prairie +
+                                  transect_paturage_prairie*degre_fauche +
+                                  axe1_1000 +
+                                  axe2_1000 +
+                                  axe1_10000 +
+                                  axe2_10000 +
+                                  (1|espece) +
+                                  (1|annee) +
+                                  (1|site_id/id_transect),                                 ,
+                                data = data_densite_sp_trans_non_nul
+)
+summary(modele.prai.densite2)
+```
+
+```{r}
+# Validité
+# Résidus
+simulation2 <- simulateResiduals(modele.prai.densite2)
+plot(simulation2)
+
+# performance
+model_performance(modele.prai.densite2)
+check_overdispersion(modele.prai.densite2)
+check_autocorrelation(modele.prai.densite2)
+check_collinearity(modele.prai.densite2)
+```
+```{r}
+Anova(modele.prai.densite2)
+```
+
+#### (iv) Modèle log+1 sur table 2
+
+ok, on va passer au log+1
+Ca peut etre pas mal, parce que les densité sont petites et du coup ln(x) equivaut à x
+
+```{r}
+data_densite_sp_trans_non_nul <- data_densite_sp_trans_non_nul |>
+  mutate(log_densite_1 = log(densite + 1))
+
+hist(data_densite_sp_trans_non_nul$log_densite_1)
+```
+```{r}
+# Modèle log_densité table 2
+modele.prai.densite2.1 <- glmmTMB(log_densite_1 ~ degre_fauche +
+                                  transect_paturage_prairie +
+                                  transect_paturage_prairie*degre_fauche +
+                                  axe1_1000 +
+                                  axe2_1000 +
+                                  axe1_10000 +
+                                  axe2_10000 +
+                                  (1|espece) +
+                                  (1|annee) +
+                                  (1|site_id/id_transect),                                 ,
+                                data = data_densite_sp_trans_non_nul
+)
+summary(modele.prai.densite2.1)
+```
+
+```{r}
+# Validité
+# Résidus
+simulation2.1 <- simulateResiduals(modele.prai.densite2.1)
+plot(simulation2.1)
+
+# performance
+model_performance(modele.prai.densite2.1)
+check_overdispersion(modele.prai.densite2.1)
+check_autocorrelation(modele.prai.densite2.1)
+check_collinearity(modele.prai.densite2.1)
+```
+
+```{r}
+Anova(modele.prai.densite2.1)
+```
+
+#3. Réfléchir (partII)
+
+## 3.a. Exploration de la table longue
+
+Idées :
+- Enveler les espèces les plus rare. Par sex : seuil fixé à 30 -sur 957 transects. Mais logiquement, prendre plus, considérer la proba d'en voir un par releve. Tester 100 comme seuil.
+- faire un modèle hurdle
+
+```{r}
+new_line <- data_densite_sp_trans_non_nul |>
+  select(id_transect_annee, espece, densite) |>
+  pivot_wider(names_from = espece, values_from = densite) |>
+  column_to_rownames("id_transect_annee") %>%
+  colSums() 
+new_line
+```
+#### (i) Modèle sur espèces courantes (densite et log-densité)
+
+```{r}
+liste_especes_courantes100 <- colnames(as.data.frame(t(new_line[new_line>100])))
+liste_especes_courantes100
+```
+```{r}
+# Modèle densité table 2 avec espèces courantes
+modele.prai.densite3.1 <- glmmTMB(densite ~ degre_fauche +
+                                  transect_paturage_prairie +
+                                  transect_paturage_prairie*degre_fauche +
+                                  axe1_1000 +
+                                  axe2_1000 +
+                                  axe1_10000 +
+                                  axe2_10000 +
+                                  (1|espece) +
+                                  (1|annee) +
+                                  (1|site_id/id_transect),                                 ,
+                                data = data_densite_sp_trans_non_nul |>
+                                          filter(espece %in% liste_especes_courantes100 )
+)
+summary(modele.prai.densite3.1)
+```
+```{r}
+# Validité
+# Résidus
+simulation3.1 <- simulateResiduals(modele.prai.densite3.1)
+plot(simulation3.1)
+
+# performance
+model_performance(modele.prai.densite3.1)
+check_overdispersion(modele.prai.densite3.1)
+check_autocorrelation(modele.prai.densite3.1)
+check_collinearity(modele.prai.densite3.1)
+```
+```{r}
+# Modèle log-densité table 2 avec espèces courantes
+modele.prai.densite3.2 <- glmmTMB(log_densite_1 ~ degre_fauche +
+                                  transect_paturage_prairie +
+                                  transect_paturage_prairie*degre_fauche +
+                                  axe1_1000 +
+                                  axe2_1000 +
+                                  axe1_10000 +
+                                  axe2_10000 +
+                                  (1|espece) +
+                                  (1|annee) +
+                                  (1|site_id/id_transect),                                 ,
+                                data = data_densite_sp_trans_non_nul |>
+                                          filter(espece %in% liste_especes_courantes100 )
+)
+summary(modele.prai.densite3.2)
+```
+
+```{r}
+# Validité
+# Résidus
+simulation3.2 <- simulateResiduals(modele.prai.densite3.2)
+plot(simulation3.2)
+
+# performance
+model_performance(modele.prai.densite3.2)
+check_overdispersion(modele.prai.densite3.2)
+check_autocorrelation(modele.prai.densite3.2)
+check_collinearity(modele.prai.densite3.2)
+```
+```{r}
+Anova(modele.prai.densite3.2)
+```
+
+Que ce soit 30 ou 100, toujours la même chose. Ceci dit, le S est moins prononcé pour la log_densité des espèces les + fréquentes
+En tout cas contente de retrouver les espèces étudiées dans la liste +100
+
+#### (ii) Modèle Hurdle peut être 
+
+(s'inspirer de Prairies_modèles_Shannon.Rmd)
+On filtre sur log_densite_1 : 
+- quand c'est nul, c'est la partie binomiale
+- quand c'est non nul, c'est la partie log-normale traitée dans le rapport, et on travaille sur log(densite)
+
+```{r}
+#vérification du nombre de données [à comparer à 3249]
+nrow(data_densite_sp_trans_non_nul |> filter(log_densite_1 != 0))
+```
+
+Youhou!!!!!!!
+
+##### Partie normale, sans les densités nulles. 
+
+```{r}
+#rajout colonne log_densite
+data_densite_sp_trans_non_nul <- data_densite_sp_trans_non_nul |>
+  mutate(log_densite = log(densite))
+
+hist(data_densite_sp_trans_non_nul[data_densite_sp_trans_non_nul$log_densite_1!=0,]$log_densite)
+```
+
+
+```{r}
+modele.prai.densite4 <- glmmTMB(log_densite ~ degre_fauche +
+                                      transect_paturage_prairie +
+                                      degre_fauche:transect_paturage_prairie +
+                                      axe1_1000 +
+                                      axe2_1000 +
+                                      axe1_10000 +
+                                      axe2_10000 +
+                                      (1|annee) +
+                                      (1|espece) +
+                                      (1|site_id/id_transect),
+                                    data = subset(data_densite_sp_trans_non_nul, log_densite_1 != 0))
+summary(modele.prai.densite4)
+```
++ Vérification des conditions
+
+```{r}
+# DHARMa
+simulation4 <- simulateResiduals(modele.prai.densite4)
+plot(simulation4)
+#testOutliers(simul, type = 'bootstrap')
+
+# performance
+model_performance(modele.prai.densite4)
+check_convergence(modele.prai.densite4)
+check_overdispersion(modele.prai.densite4)
+check_autocorrelation(modele.prai.densite4)
+check_heteroscedasticity(modele.prai.densite4)
+check_collinearity(modele.prai.densite4)
+```
+```{r}
+Anova(modele.prai.densite4)
+```
+```{r}
+#xtable(Anova(modele.prai.densite4))
+```
+
+##### Partie binomiale
+
+```{r}
+#Ajout de la colonne densite_bin
+data_densite_sp_trans_non_nul <- data_densite_sp_trans_non_nul |>
+  mutate(densite_bin = ifelse(log_densite_1 !=0, 1, 0))
+```
+
+
+```{r}
+modele.prai.densite4.0 <- glmmTMB(densite_bin ~ degre_fauche +
+                                   transect_paturage_prairie +
+                                   degre_fauche:transect_paturage_prairie +
+                                   axe1_1000 +
+                                   axe2_1000 +
+                                   axe1_10000 +
+                                   axe2_10000 +
+                                   (1|annee) +
+                                   (1|espece) +
+                                   (1|site_id/id_transect),
+                                 family = binomial(),
+                                 data = data_densite_sp_trans_non_nul)
+summary(modele.prai.densite4.0)
+```
+
++ Vérification des conditions
+
+```{r}
+# DHARMa
+simulation4.0 <- simulateResiduals(modele.prai.densite4.0)
+plot(simulation4.0)
+testOutliers(simulation4.0, type = 'bootstrap')
+
+# performance
+model_performance(modele.prai.densite4.0)
+check_convergence(modele.prai.densite4.0)
+check_overdispersion(modele.prai.densite4.0)
+check_autocorrelation(modele.prai.densite4.0)
+#check_heteroscedasticity(modele.prai.aveff.nul)
+check_collinearity(modele.prai.densite4.0)
+```
+
+```{r}
+Anova(modele.prai.densite4.0)
+```
+```{r}
+xtable(Anova(simulation4.0))
+```
+
+
+
